@@ -16,23 +16,24 @@ import javafx.util.Pair;
 
 
 import noob.plantsystem.common.ArduinoProxy;
-import noob.plantsystem.common.SerializedArduinoState;
+import noob.plantsystem.common.PersistentArduinoState;
 /**
  *
  * @author noob
  */
-public class ArduinoPropertySerializer {
+public class ArduinoFilesystemSaver {
 
     public boolean save(ArduinoProxy arg) {
         boolean success = true;
-        File tentativePath = new File(String.valueOf(arg.getUID()) + ".TEMP");
+        PersistentArduinoState state = arg.getPersistentState();
+        File tentativePath = new File(String.valueOf(state.getUID()) + ".TEMP");
         try {
             FileOutputStream fileOut = new FileOutputStream(tentativePath);
             ObjectOutputStream oos = new ObjectOutputStream(fileOut);
-            oos.writeObject(arg.getSerializedState());
+            oos.writeObject(arg.getPersistentState());
             oos.flush();
             fileOut.flush();
-            success = tentativePath.renameTo(new File(String.valueOf(arg.getUID())));
+            success = tentativePath.renameTo(new File(String.valueOf(state.getUID())));
         } catch (FileNotFoundException e) { success = false; }
         catch (IOException e) { success = false; }
         finally { }
@@ -41,15 +42,14 @@ public class ArduinoPropertySerializer {
     }
 
         
-    public Pair<Boolean, ArduinoProxy> load(ArduinoProxy arg) {
+    public Pair<Boolean, ArduinoProxy> load(long uid) {
         Boolean success = true;
-        ArduinoProxy results = arg;
-        File tentativePath = new File(String.valueOf(arg.getUID()));
-        
+        ArduinoProxy results = new ArduinoProxy();
+        File tentativePath = new File(String.valueOf(uid));
         try {
             FileInputStream fileIn = new FileInputStream(tentativePath);
             ObjectInputStream ois = new ObjectInputStream(fileIn);
-            results.setSerializedState((SerializedArduinoState)ois.readObject());
+            results.setPersistentState((PersistentArduinoState)ois.readObject());
         } catch (FileNotFoundException e) { success = false; }
         catch (IOException | ClassNotFoundException e) { success = false; }
         finally { }

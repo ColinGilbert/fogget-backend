@@ -5,12 +5,15 @@
  */
 package noob.plantsystem.backend;
 
+import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.ArrayDeque;
+import java.util.Iterator;
+import java.util.Collections;
+import javafx.util.Pair;
 
-import noob.plantsystem.common.EventDescription;
-import noob.plantsystem.common.EventsResponseIterator;
-import noob.plantsystem.common.EventsResponseIteratorBuilder;
+import noob.plantsystem.common.ArduinoEventDescriptions;
 
 /**
  *
@@ -20,58 +23,37 @@ public class EventPool {
 
     public EventPool(int bufferSize) {
         capacity = bufferSize;
-        currentEvents = new HashMap<>();
         events = new HashMap<>();
     }
 
-    public void clear() {
-        currentEvents.entrySet().forEach((entry) -> {
-            currentEvents.replace(entry.getKey(), 0);
-        });
-        events.clear();
-    }
-
-    public synchronized boolean add(long uidArg, long timestampArg, int eventArg) {
+    public synchronized void add(long uidArg, long timestampArg, int eventArg) {
         if (events.containsKey(uidArg)) {
-            if (currentEvents.containsKey(uidArg)) {
-                int current = currentEvents.get(uidArg);
-                if (current < capacity - 1) {
-                    EventRecord rec = new EventRecord();
-                    rec.timestamp = timestampArg;
-                    rec.eventType = eventArg;
-                    current++;
-                    currentEvents.replace(uidArg, current);
-                    return true;
-                }
+            EventRecord rec = new EventRecord();
+            rec.timestamp = timestampArg;
+            rec.eventType = eventArg;
+            if (events.get(uidArg).size() < capacity) {
+                events.get(uidArg).addFirst(rec);
+            } else {
+                events.get(uidArg).removeLast();
+                events.get(uidArg).addFirst(rec);
             }
-            else { // Add uid to currentEvents, then call itself again.
-                currentEvents.put(uidArg, 0);
-                return this.add(uidArg, timestampArg, eventArg);
-            }
+        } else {
+            // Add uid + preassigned array to events, then call itself again.
+            events.put(uidArg, new ArrayDeque<>(capacity));
+            add(uidArg, timestampArg, eventArg);
         }
-        else { // Add uid + preassigned array to events, then call itself again. It will then call itself.
-            events.put(uidArg, new ArrayList<>(capacity));
-            return this.add(uidArg, timestampArg, eventArg);
-        }
-        return false;
     }
 
-    EventsResponseIterator getIterator() {
-        EventsResponseIteratorBuilder builder = new EventsResponseIteratorBuilder();
-        events.entrySet().forEach((entry) -> {
-           if (currentEvents.containsKey(entry.getKey())) {
-               builder.addArduino(entry.getKey());
-               int max = currentEvents.get(entry.getKey());
-               for (int i = 0; i < max; i++) {
-                   EventRecord rec = entry.getValue().get(i);
-                    builder.addEvent(rec.eventType, rec.timestamp);               }
-           }
-        });
-        return builder.getBuiltItem();
+    public Pair<Boolean, List<EventRecord>> getEvents(long uid) {
+        if (events.containsKey(uid)) {
+          return new Pair<>(true, Collections.unmodifiableList((List)events.get(uid)));
+        }
+        else {
+            return new Pair<>(false, Collections.unmodifiableList(new ArrayList<>()));
+        }
     }
-
-    protected HashMap<Long, ArrayList<EventRecord>> events;
-    protected HashMap<Long, Integer> currentEvents;
-    protected EventDescription descriptions;
+    
+    protected HashMap<Long, ArrayDeque<EventRecord>> events;
+    protected ArduinoEventDescriptions descriptions;
     int capacity;
 }

@@ -8,6 +8,8 @@ package noob.plantsystem.backend;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+
 import java.sql.Timestamp;
 
 import java.util.HashMap;
@@ -25,277 +27,281 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MqttDefaultFilePersistence;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
+import com.fasterxml.jackson.core.TokenStreamFactory;
+import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.JsonProcessingException;
+
 /**
  *
  * @author noob
  */
-public class Backend implements UserCommunicationInterface, MqttCallback {
+public class Backend implements MqttCallback {
 
-    // Getters
-    public List<Long> getActiveArduinoSystems() {
-        ArrayList<Long> results = new ArrayList<>();
-
-        return results;
+    public void init(boolean clean) throws MqttException {
+        connectionOptions = new MqttConnectOptions();
+        connectionOptions.setCleanSession(true);
+        client = new MqttAsyncClient(brokerURL, Long.toString(1));
     }
 
-    public List<ArduinoProxy> getArduinoState(List<Integer> args) {
-        ArrayList<ArduinoProxy> results = new ArrayList<>();
-
-        return results;
-    }
-
-    public EventsResponseIterator getArduinoHistory(int numEvents, List<Long> uids, List<Integer> eventTypes) {
-        EventsResponseIteratorBuilder builder = new EventsResponseIteratorBuilder();
-
-        return builder.getBuiltItem();
-    }
-
-    public Map<Long, String> getArduinoDescriptions(List<Long> uids) {
-        HashMap<Long, String> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Integer, String> getEventDescriptions() {
-        HashMap<Integer, String> results = new HashMap<>();
-
-        return results;
-    }
-
-    public long getTime() {
-        return System.currentTimeMillis();
-    }
-
-    // Setters
-    public Map<Long, Boolean> setArduinoDescription(Map<Long, String> values) {
-        HashMap<Long, Boolean> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Boolean> setMistingInterval(Map<Long, Long> values) {
-        HashMap<Long, Boolean> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Long> setNutrientsPPM(Map<Long, Long> values) {
-        HashMap<Long, Long> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Double> setNutrientsSolutionRatio(Map<Long, Double> values) {
-        HashMap<Long, Double> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Boolean> setDailyLightingSchedule(List<Long> uids, long onTimeMillis, long offTimeMillis) {
-        HashMap<Long, Boolean> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Boolean> unlock(List<Long> uids, long millis) {
-        HashMap<Long, Boolean> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Boolean> lock(List<Long> uids) {
-        HashMap<Long, Boolean> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Float> setTargetUpperChamberHumidity(List<Long> uids, float percentage) {
-        HashMap<Long, Float> results = new HashMap<Long, Float>();
-
-        return results;
-    }
-
-    public Map<Long, Float> setTargetUpperChamberTemperature(List<Long> uids, float percentage) {
-        HashMap<Long, Float> results = new HashMap<Long, Float>();
-
-        return results;
-    }
-
-    public Map<Long, Float> setTargetLowerChamberTemperature(List<Long> uids, float percentage) {
-        HashMap<Long, Float> results = new HashMap<>();
-
-        return results;
-    }
-
-    public Map<Long, Float> setCurrentLowerChamberTemperature(List<Long> uids, float percentage) {
-        HashMap<Long, Float> results = new HashMap<>();
-
-        return results;
-    }
-
-    protected void log(String arg) {
-        if (logging) {
-            System.out.println(arg);
-        }
+    void setLogging(boolean arg) {
+        logging = arg;
     }
 
     // Required callbacks, implementing the MQTT library interface requirements.
+    @Override
     public void connectionLost(Throwable cause) {
-
+        // TODO: Add reconnect logic
+        ex = cause;
+        log("Connection lost! Cause" + ex.toString());
+        connect();
     }
 
+    @Override
     public void deliveryComplete(IMqttDeliveryToken token) {
-
+        // Logic implementing what we do when we know stuff got delivered.
+        log("Delivery complete! " + token.toString());
     }
 
+    @Override
     public void messageArrived(String topic, MqttMessage message) throws MqttException {
+        log("Got a message.");
 
-    }
-
-    public void publish(String topicName, int qos, byte[] payload) throws Throwable {
-        // Use a state machine to decide which step to do next. State change occurs 
-        // when a notification is received that an MQTT action has completed
-        while (state != FINISH) {
-            switch (state) {
-                case BEGIN:
-                    // Connect using a non-blocking connect
-                    MqttConnector con = new MqttConnector();
-                    con.doConnect();
-                    break;
-                case CONNECTED:
-                    // Publish using a non-blocking publisher
-                    Publisher pub = new Publisher();
-                    pub.doPublish(topicName, qos, payload);
-                    break;
-                case PUBLISHED:
-                    state = DISCONNECT;
-                    doNext = true;
-                    break;
-                case DISCONNECT:
-                    Disconnector disc = new Disconnector();
-                    disc.doDisconnect();
-                    break;
-                case ERROR:
-                    throw ex;
-                case DISCONNECTED:
-                    state = FINISH;
-                    doNext = true;
-                    break;
-            }
-
-//    		if (state != FINISH) {
-            // Wait until notified about a state change and then perform next action
-            waitForStateChange(10000);
-//    		}
+        // Here is where the real fun begins. Most of what we do is in response to messages arriving into our system.
+        String splitTopic[] = topic.split("/");
+        if (splitTopic.length == 0) {
+            log("Received a message without any topic. Cannot do anything with it.");
+            return;
         }
-    }
-
-    /**
-     * Wait for a maximum amount of time for a state change event to occur
-     *
-     * @param maxTTW maximum time to wait in milliseconds
-     * @throws MqttException
-     */
-    private void waitForStateChange(int maxTTW) throws MqttException {
-        synchronized (waiter) {
-            if (!doNext) {
-                try {
-                    waiter.wait(maxTTW);
-                } catch (InterruptedException e) {
-                    log("timed out");
-                    e.printStackTrace();
+        String initialTopic = splitTopic[0];
+        byte[] contents = message.toString().getBytes();
+        ObjectMapper objectMapper = new ObjectMapper();
+        if (topic.equals(TopicStrings.embeddedHello())) { // We've just been informed of a fresh system within our purview.
+            log("Got a hello message.");
+            // Add new arduino to system pool. Add its state to our systems pool.
+            try {
+                JsonNode rootNode = objectMapper.readTree(contents);
+                JsonNode currentNode = rootNode.path(ArduinoPropertyStrings.uid());
+                if (currentNode.isMissingNode()) {
+                    log("Received hello with missing UID. Aborting add.");
+                    return;
                 }
-
-                if (ex != null) {
-                    throw (MqttException) ex;
+                final long uid = currentNode.asLong();
+                if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
+                    ArduinoProxy proxy = systems.get(uid);
+                    pushConfig(proxy.getPersistentState());
+                } else {  // We create a new representation and offer it sane defaults.
+                    ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
+                    PersistentArduinoState state = proxy.getPersistentState();
+                    state.setUID(uid);
+                    proxy.setPersistentState(state);
+                    systems.put(currentNode.asLong(), proxy);
                 }
+                String freshTopic = TopicStrings.embeddedStatusReport();
+                freshTopic += "/";
+                freshTopic += uid;
+
+                subscribe(freshTopic, 1);
+            } catch (IOException e) {
+                log("Exception caught while mapping new Arduino into livepool. Cause: " + e.toString());
             }
-            doNext = false;
+        } else if (initialTopic.equals(TopicStrings.embeddedEvent())) { // We have been just informed of an event that is worth logging...
+            try {
+                JsonNode rootNode = objectMapper.readTree(contents);
+                JsonNode currentNode = rootNode.path(ArduinoPropertyStrings.uid());
+                if (currentNode.isMissingNode()) {
+                    log("Received important event with missing uid. Aborting event updates.");
+                    return;
+                }
+                final long uid = currentNode.asLong();
+                if (systems.containsKey(uid)) {
+                    ArduinoProxy proxy = systems.get(uid);
+                    currentNode = rootNode.path("event");
+                    if (currentNode.isMissingNode()) {
+                        log("Received important event with missing event description.");
+                        return;
+                    }
+                    final String event = currentNode.asText();
+                    if (eventDescriptions.exists(event)) {
+                        EventRecord rec = new EventRecord();
+                        events.add(uid, System.currentTimeMillis(), eventDescriptions.getCode(event).getValue());
+                    } else {
+                        log("Important event received with invalid event number");
+                    }
+                }
+            } catch (IOException e) {
+                log("Exception caught while receiving an important event from an embedded system. Cause: " + e.toString());
+            }
+        } else if (initialTopic.equals(TopicStrings.embeddedStatusReport())) { // We have just been given our periodic status update from one of our systems.
+            // Time to compare values in our existing pool and update when necessary.
+            try {
+                JsonNode rootNode = objectMapper.readTree(contents);
+                JsonNode currentNode = rootNode.path(ArduinoPropertyStrings.uid());
+                if (currentNode.isMissingNode()) {
+                    log("Received status update without uid. Cannot update any values.");
+                    return;
+                }
+                TransientArduinoState trans = new TransientArduinoState();
+                TransientStateLastUpdated lastUpdated = trans.getLastUpdated();
+                final long currentTime = System.currentTimeMillis();
+                currentNode = rootNode.path(ArduinoPropertyStrings.timeOfDay());
+                if (!currentNode.isMissingNode()) {
+                    trans.setTimeOfDay(currentNode.asLong());
+                    lastUpdated.setTimeOfDay(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.reservoirLevel());
+                if (!currentNode.isMissingNode()) {
+                    trans.setReservoirLevel(currentNode.floatValue());
+                    lastUpdated.setReservoirLevel(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.nutrientSolutionLevel());
+                if (!currentNode.isMissingNode()) {
+                    trans.setNutrientSolutionLevel(currentNode.floatValue());
+                    lastUpdated.setNutrientSolutionLevel(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.lights());
+                if (!currentNode.isMissingNode()) {
+                    trans.setLights(currentNode.asBoolean());
+                    lastUpdated.setLights(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.powered());
+                if (!currentNode.isMissingNode()) {
+                    trans.setPowered(currentNode.asBoolean());
+                    lastUpdated.setPowered(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.doorsLocked());
+                if (!currentNode.isMissingNode()) {
+                    trans.setDoorsLocked(currentNode.asBoolean());
+                    lastUpdated.setLocked(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.doorsOpen());
+                if (!currentNode.isMissingNode()) {
+                    trans.setDoorsOpen(currentNode.asBoolean());
+                    lastUpdated.setDoorsOpen(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.timeLeftUnlocked());
+                if (!currentNode.isMissingNode()) {
+                    trans.setTimeLeftUnlocked(currentNode.asLong());
+                    lastUpdated.setTimeLeftUnlocked(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.upperChamberHumidity());
+                if (!currentNode.isMissingNode()) {
+                    trans.setUpperChamberHumidity(currentNode.floatValue());
+                    lastUpdated.setUpperChamberHumidity(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.upperChamberTemperature());
+                if (!currentNode.isMissingNode()) {
+                    trans.setUpperChamberTemperature(currentNode.floatValue());
+                    lastUpdated.setUpperChamberTemperature(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.lowerChamberTemperature());
+                if (!currentNode.isMissingNode()) {
+                    trans.setLowerChamberTemperature(currentNode.floatValue());
+                    lastUpdated.setLowerChamberTemperature(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.CO2PPM());
+                if (!currentNode.isMissingNode()) {
+                    trans.setCO2PPM(currentNode.asInt());
+                    lastUpdated.setCO2PPM(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.dehumidifying());
+                if (!currentNode.isMissingNode()) {
+                    trans.setDehumidifying(currentNode.asBoolean());
+                    lastUpdated.setDehumidifying(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.cooling());
+                if (!currentNode.isMissingNode()) {
+                    trans.setCooling(currentNode.asBoolean());
+                    lastUpdated.setCooling(currentTime);
+                }
+                currentNode = rootNode.path(ArduinoPropertyStrings.injectingCO2());
+                if (!currentNode.isMissingNode()) {
+                    trans.setInjectingCO2(currentNode.asBoolean());
+                    lastUpdated.setInjectingCO2(currentTime);
+                }
+            } catch (IOException e) {
+                log("Exception caught while receiving a routine update from an embedded system. Cause: " + e.toString());
+            }
+        } else {
+            log("Unknown MQTT topic received:" + topic);
         }
     }
 
-    /**
-     * Subscribe to a topic on an MQTT server Once subscribed this method waits
-     * for the messages to arrive from the server that match the subscription.
-     * It continues listening for messages until the enter key is pressed.
-     *
-     * @param topicName to subscribe to (can be wild carded)
-     * @param qos the maximum quality of service to receive messages at for this
-     * subscription
-     * @throws MqttException
-     */
-    public void subscribe(String topicName, int qos) throws Throwable {
-        // Use a state machine to decide which step to do next. State change occurs 
-        // when a notification is received that an MQTT action has completed
-        while (state != FINISH) {
-            switch (state) {
-                case BEGIN:
-                    // Connect using a non-blocking connect
-                    MqttConnector con = new MqttConnector();
-                    con.doConnect();
-                    break;
-                case CONNECTED:
-                    // Subscribe using a non-blocking subscribe
-                    Subscriber sub = new Subscriber();
-                    sub.doSubscribe(topicName, qos);
-                    break;
-                case SUBSCRIBED:
-                 // Block until Enter is pressed allowing messages to arrive
-                 //   log("Press <Enter> to exit");
-                 //   try {
-                 //       System.in.read();
-                 //   } catch (IOException e) {
-                 // If we can't read we'll just exit
-                 //   }
-                    state = DISCONNECT;
-                    doNext = true;
-                    break;
-                case DISCONNECT:
-                    Disconnector disc = new Disconnector();
-                    disc.doDisconnect();
-                    break;
-                case ERROR:
-                    throw ex;
-                case DISCONNECTED:
-                    state = FINISH;
-                    doNext = true;
-                    break;
-            }
-
-//    		if (state != FINISH && state != DISCONNECT) {
-            waitForStateChange(10000);
+    // End of MQTT interface callbacks.
+    public void connect() {
+        MqttConnector con = new MqttConnector();
+        con.doConnect();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log("Wait interrupted: " + e);
         }
-//    	}    	
+        subscribe("+", 1);
+        subscribe(TopicStrings.embeddedHello(), 1);
+    }
+
+    public void disconnect() {
+        Disconnector disc = new Disconnector();
+        disc.doDisconnect();
+    }
+
+    public void subscribe(String topic, int qos) {
+        Subscriber sub = new Subscriber();
+        sub.doSubscribe(topic, qos);
+    }
+
+    public void pushConfig(PersistentArduinoState arg) {
+        // Logic to push to embedded system.
+        ObjectMapper objectMapper = new ObjectMapper();
+        String messageStr;
+        try {
+            messageStr = objectMapper.writeValueAsString(arg);
+        } catch (JsonProcessingException e) {
+            log("Problem writing JSON to string in pushConfig. Reason: " + e.getMessage());
+            return;
+        }
+        String topic = TopicStrings.embeddedStatusReport();
+        topic += "/";
+        topic += Long.toString(arg.getUID());
+        Publisher pub = new Publisher();
+        pub.doPublish(topic, 1, messageStr.getBytes());
     }
 
     // The following are async helper classes from https://github.com/eclipse/paho.mqtt.java
     public class MqttConnector {
 
-        public MqttConnector() {
-        }
-
         public void doConnect() {
             // Connect to the server. Get a token and setup an asynchronous listener on the token which will be notified once the connect completes.
             log("Connecting to " + brokerURL + " with client ID " + client.getClientId());
 
-            IMqttActionListener conListener = new IMqttActionListener() {
+            IMqttActionListener conListener;
+            conListener = new IMqttActionListener() {
+                @Override
                 public void onSuccess(IMqttToken asyncActionToken) {
-                    state = CONNECTED;
-
+                    // state = CONNECTED;
                     log("Connected");
                     carryOn();
                 }
 
+                @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
                     ex = exception;
-                    state = ERROR;
-                    log("connect failed" + exception);
+                    // state = ERROR;
+                    log("Connect failed" + exception);
                     carryOn();
                 }
 
                 public void carryOn() {
                     synchronized (waiter) {
-                        state = ERROR;
+                        // state = ERROR;
                         doNext = true;
                         waiter.notifyAll();
                     }
@@ -313,7 +319,7 @@ public class Backend implements UserCommunicationInterface, MqttCallback {
         }
     }
 
-    // Publish in a non-blocking way and then sit back and wait to be notified that the action has completed.
+// Publish in a non-blocking way and then sit back and wait to be notified that the action has completed.
     public class Publisher {
 
         public void doPublish(String topicName, int qos, byte[] payload) {
@@ -326,24 +332,25 @@ public class Backend implements UserCommunicationInterface, MqttCallback {
             log("Publishing at: " + time + " to topic \"" + topicName + "\" qos " + qos);
 
             // Setup a listener object to be notified when the publish completes.
-            //
-            IMqttActionListener pubListener = new IMqttActionListener() {
+            IMqttActionListener pubListener;
+            pubListener = new IMqttActionListener() {
+                @Override
                 public void onSuccess(IMqttToken asyncActionToken) {
                     log("Publish Completed");
-                    state = PUBLISHED;
+                    // state = PUBLISHED;
                     carryOn();
                 }
 
+                @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
                     ex = exception;
                     log("Publish failed" + exception);
-                    state = ERROR;
+                    // state = ERROR;
                     carryOn();
                 }
 
                 public void carryOn() {
                     synchronized (waiter) {
-
                         doNext = true;
                         waiter.notifyAll();
                     }
@@ -354,14 +361,14 @@ public class Backend implements UserCommunicationInterface, MqttCallback {
                 // Publish the message
                 client.publish(topicName, message, "Pub sample context", pubListener);
             } catch (MqttException e) {
-                state = ERROR;
+                // state = ERROR;
                 doNext = true;
                 ex = e;
             }
         }
     }
 
-    // Subscribe in a non-blocking way and then sit back and wait to be notified that the action has completed.
+// Subscribe in a non-blocking way and then sit back and wait to be notified that the action has completed.
     public class Subscriber {
 
         public void doSubscribe(String topicName, int qos) {
@@ -369,16 +376,19 @@ public class Backend implements UserCommunicationInterface, MqttCallback {
             // Get a token and setup an asynchronous listener on the token which will be notified once the subscription is in place.
             log("Subscribing to topic \"" + topicName + "\" qos " + qos);
 
-            IMqttActionListener subListener = new IMqttActionListener() {
+            IMqttActionListener subListener;
+            subListener = new IMqttActionListener() {
+                @Override
                 public void onSuccess(IMqttToken asyncActionToken) {
-                    state = SUBSCRIBED;
+                    // state = SUBSCRIBED;
                     log("Subscribe Completed");
                     carryOn();
                 }
 
+                @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
                     ex = exception;
-                    state = ERROR;
+                    // state = ERROR;
                     log("Subscribe failed" + exception);
                     carryOn();
                 }
@@ -394,37 +404,39 @@ public class Backend implements UserCommunicationInterface, MqttCallback {
             try {
                 client.subscribe(topicName, qos, "Subscribe sample context", subListener);
             } catch (MqttException e) {
-                state = ERROR;
+                // state = ERROR;
                 doNext = true;
                 ex = e;
             }
         }
     }
 
-    // Disconnect in a non-blocking way and then sit back and wait to be notified that the action has completed.
+// Disconnect in a non-blocking way and then sit back and wait to be notified that the action has completed.
     public class Disconnector {
 
         public void doDisconnect() {
             // Disconnect the client
             log("Disconnecting");
 
-            IMqttActionListener discListener = new IMqttActionListener() {
+            IMqttActionListener discListener;
+            discListener = new IMqttActionListener() {
+                @Override
                 public void onSuccess(IMqttToken asyncActionToken) {
                     log("Disconnect Completed");
-                    state = DISCONNECTED;
+                    // state = DISCONNECTED;
                     carryOn();
                 }
 
+                @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
                     ex = exception;
                     log("Disconnect failed" + exception);
-                    state = ERROR;
+                    // state = ERROR;
                     carryOn();
                 }
 
                 public void carryOn() {
                     synchronized (waiter) {
-
                         doNext = true;
                         waiter.notifyAll();
                     }
@@ -434,35 +446,33 @@ public class Backend implements UserCommunicationInterface, MqttCallback {
             try {
                 client.disconnect("Disconnect", discListener);
             } catch (MqttException e) {
-                state = ERROR;
+                // state = ERROR;
                 doNext = true;
                 ex = e;
             }
         }
     }
 
-    protected LiveSystemPool systemPool;
-    protected EventPool eventPool;
+    protected void log(String arg) {
+        if (logging) {
+            System.out.println(arg);
+        }
+    }
+
+    protected EventPool events = new EventPool(1000);
+    protected HashMap<Long, ArduinoProxy> systems = new HashMap<>();
+    protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
+    protected HashMap<Long, String> systemDescriptions = new HashMap<>();
 
     //MQTT related
-    protected String brokerURL;
+    protected String brokerURL = "tcp://127.0.0.1:1883";
     protected MqttAsyncClient client;
     protected boolean logging;
     protected MqttConnectOptions connectionOptions;
-    protected boolean clean;
+
+    // protected boolean clean;
     protected Throwable ex = null;
     protected Object waiter = new Object();
     protected boolean doNext = false;
-
-    protected int state = BEGIN;
-
-    static final int BEGIN = 0;
-    static final int CONNECTED = 1;
-    static final int PUBLISHED = 2;
-    static final int SUBSCRIBED = 3;
-    static final int DISCONNECTED = 4;
-    static final int FINISH = 5;
-    static final int ERROR = 6;
-    static final int DISCONNECT = 7;
 
 }
