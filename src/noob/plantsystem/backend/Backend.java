@@ -12,7 +12,7 @@ import java.util.Set;
 
 import java.sql.Timestamp;
 
-import java.util.HashMap;
+import java.util.TreeMap;
 import java.util.ArrayList;
 
 import noob.plantsystem.common.*;
@@ -91,7 +91,7 @@ public class Backend implements MqttCallback {
     }
 
     // Logic to push configuration to embedded system.
-    public void pushConfig(PersistentArduinoState arg) {
+    public void pushConfig(ArduinoConfigChangeRepresentation arg) {
         log("Pushing configuration");
         ObjectMapper objectMapper = new ObjectMapper();
         String messageStr;
@@ -154,30 +154,12 @@ public class Backend implements MqttCallback {
         } else if (initialTopic.equals(TopicStrings.eventsViewRequest())) {
             handleEventsViewRequest(message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
-            handleStateControlRequest(message);
+            handleControllerRequest(message);
         } else {
             log("Unknown MQTT topic received: " + topic);
         }
     }
 
-    /*
-    protected void handleEmbeddedHello(MqttMessage message) {
-        ObjectMapper objectMapper = new ObjectMapper();
-        HelloMessageRepresentation hello;
-        try {
-            hello = objectMapper.readValue(message.toString(), HelloMessageRepresentation.class);
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        }
-        final long uid = hello.getUid();
-
-
-}
-     */
     protected void handleEmbeddedEvent(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
         ArduinoEvent info;
@@ -228,22 +210,24 @@ public class Backend implements MqttCallback {
             log("Status report for " + info.getUid() + " received.");
         } else {
             ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
-            proxy.setTargetUpperChamberHumidity(70.0f);
             PersistentArduinoState state = proxy.extractPersistentState();
             state.setUid(uid);
             proxy.updatePersistentState(state);
             systems.put(uid, proxy);
             subscribeToEmbeddedSystem(uid);
-            pushConfig(proxy.extractPersistentState());
+            ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
+            representation.updateConfigValues(state);
+            pushConfig(representation);
         }
     }
-
 
     protected void handleSystemsViewRequest(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
         List<ArduinoProxy> responseData = new ArrayList<>();
+        for (long k : systems.keySet()) {
+            responseData.add(systems.get(k));
+        }
         String responseStr = "";
-/*
         try {
             responseStr = objectMapper.writeValueAsString(responseData);
 
@@ -251,9 +235,7 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        */
         // Publish response over MQTT
-
         publish(TopicStrings.systemsViewResponse(), 2, responseStr.getBytes());
     }
 
@@ -270,23 +252,24 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        /*
-        EventsViewResponseRepresentation responseData = new EventsViewResponseRepresentation();
-        Pair<Boolean, ArrayDeque<EventRecord>> records = events.getEvents(request.getUid());
-        responseData.setEvents(records.getValue());
-        responseData.setUid(request.getUid());
-        String responseStr = "";
-        try {
-            responseStr = objectMapper.writeValueAsString(responseData);
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
+        final long uid = request.getUid();
+        Pair<Boolean, ArrayDeque<EventRecord>> data = events.getEvents(uid);
+        if (data.getKey()) {
+            String responseStr = "";
+            try {
+                responseStr = objectMapper.writeValueAsString(data.getValue());
+                publish(TopicStrings.eventsViewResponse(), 2, responseStr.getBytes());
+
+            } catch (JsonProcessingException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            }
+        } else {
+            log("Invalid uid for events request: " + uid);
         }
-        publish(TopicStrings.eventsViewResponse(), 2, responseStr.getBytes());
-*/
     }
 
-    protected void handleStateControlRequest(MqttMessage message) {
+    protected void handleControllerRequest(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
         PersistentArduinoState request;
         try {
@@ -488,9 +471,9 @@ public class Backend implements MqttCallback {
     }
 
     protected EventPool events = new EventPool(1000);
-    protected HashMap<Long, ArduinoProxy> systems = new HashMap<>();
-    protected HashMap<Long, Long> lastUpdated = new HashMap<>();
-    protected HashMap<Long, String> systemDescriptions = new HashMap<>();
+    protected TreeMap<Long, ArduinoProxy> systems = new TreeMap<>();
+    // protected TreeMap<Long, Long> lastUpdated = new TreeMap<>();
+    protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
 
     //MQTT related
