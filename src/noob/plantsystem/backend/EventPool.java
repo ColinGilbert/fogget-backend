@@ -14,6 +14,7 @@ import java.util.Collections;
 import javafx.util.Pair;
 
 import noob.plantsystem.common.ArduinoEventDescriptions;
+import noob.plantsystem.common.EventRecord;
 
 /**
  *
@@ -29,8 +30,8 @@ public class EventPool {
     public synchronized void add(long uidArg, long timestampArg, int eventArg) {
         if (events.containsKey(uidArg)) {
             EventRecord rec = new EventRecord();
-            rec.timestamp = timestampArg;
-            rec.eventType = eventArg;
+            rec.setTimestamp(timestampArg);
+            rec.setEvent(eventArg);
             if (events.get(uidArg).size() < capacity) {
                 events.get(uidArg).addFirst(rec);
             } else {
@@ -44,12 +45,12 @@ public class EventPool {
         }
     }
 
-    public Pair<Boolean, List<EventRecord>> getEvents(long uid) {
+    public Pair<Boolean, ArrayDeque<EventRecord>> getEvents(long uid) {
         if (events.containsKey(uid)) {
-          return new Pair<>(true, Collections.unmodifiableList((List)events.get(uid)));
+          return new Pair<>(true, events.get(uid));
         }
         else {
-            return new Pair<>(false, Collections.unmodifiableList(new ArrayList<>()));
+            return new Pair<>(false, new ArrayDeque<>());
         }
     }
     

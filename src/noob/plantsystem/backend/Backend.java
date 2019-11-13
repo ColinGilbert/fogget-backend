@@ -25,7 +25,7 @@ import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
-import org.eclipse.paho.client.mqttv3.persist.MqttDefaultFilePersistence;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -38,6 +38,12 @@ import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.util.ArrayDeque;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javafx.util.Pair;
 
 /**
  *
@@ -45,207 +51,28 @@ import com.fasterxml.jackson.core.JsonProcessingException;
  */
 public class Backend implements MqttCallback {
 
-    public void init(boolean clean) throws MqttException {
+    public void init() throws MqttException {
         connectionOptions = new MqttConnectOptions();
-        connectionOptions.setCleanSession(true);
-        client = new MqttAsyncClient(brokerURL, Long.toString(1));
+        connectionOptions.setCleanSession(false);
+        client = new MqttAsyncClient(brokerURL, Long.toString(1), new MemoryPersistence());
+        client.setCallback(this);
     }
 
     void setLogging(boolean arg) {
         logging = arg;
     }
 
-    // Required callbacks, implementing the MQTT library interface requirements.
-    @Override
-    public void connectionLost(Throwable cause) {
-        // TODO: Add reconnect logic
-        ex = cause;
-        log("Connection lost! Cause" + ex.toString());
-        connect();
-    }
-
-    @Override
-    public void deliveryComplete(IMqttDeliveryToken token) {
-        // Logic implementing what we do when we know stuff got delivered.
-        log("Delivery complete! " + token.toString());
-    }
-
-    @Override
-    public void messageArrived(String topic, MqttMessage message) throws MqttException {
-        log("Got a message.");
-
-        // Here is where the real fun begins. Most of what we do is in response to messages arriving into our system.
-        String splitTopic[] = topic.split("/");
-        if (splitTopic.length == 0) {
-            log("Received a message without any topic. Cannot do anything with it.");
-            return;
-        }
-        String initialTopic = splitTopic[0];
-        byte[] contents = message.toString().getBytes();
-        ObjectMapper objectMapper = new ObjectMapper();
-        if (topic.equals(TopicStrings.embeddedHello())) { // We've just been informed of a fresh system within our purview.
-            log("Got a hello message.");
-            // Add new arduino to system pool. Add its state to our systems pool.
-            try {
-                JsonNode rootNode = objectMapper.readTree(contents);
-                JsonNode currentNode = rootNode.path(ArduinoPropertyStrings.uid());
-                if (currentNode.isMissingNode()) {
-                    log("Received hello with missing UID. Aborting add.");
-                    return;
-                }
-                final long uid = currentNode.asLong();
-                if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
-                    ArduinoProxy proxy = systems.get(uid);
-                    pushConfig(proxy.getPersistentState());
-                } else {  // We create a new representation and offer it sane defaults.
-                    ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
-                    PersistentArduinoState state = proxy.getPersistentState();
-                    state.setUID(uid);
-                    proxy.setPersistentState(state);
-                    systems.put(currentNode.asLong(), proxy);
-                }
-                String freshTopic = TopicStrings.embeddedStatusReport();
-                freshTopic += "/";
-                freshTopic += uid;
-
-                subscribe(freshTopic, 1);
-            } catch (IOException e) {
-                log("Exception caught while mapping new Arduino into livepool. Cause: " + e.toString());
-            }
-        } else if (initialTopic.equals(TopicStrings.embeddedEvent())) { // We have been just informed of an event that is worth logging...
-            try {
-                JsonNode rootNode = objectMapper.readTree(contents);
-                JsonNode currentNode = rootNode.path(ArduinoPropertyStrings.uid());
-                if (currentNode.isMissingNode()) {
-                    log("Received important event with missing uid. Aborting event updates.");
-                    return;
-                }
-                final long uid = currentNode.asLong();
-                if (systems.containsKey(uid)) {
-                    ArduinoProxy proxy = systems.get(uid);
-                    currentNode = rootNode.path("event");
-                    if (currentNode.isMissingNode()) {
-                        log("Received important event with missing event description.");
-                        return;
-                    }
-                    final String event = currentNode.asText();
-                    if (eventDescriptions.exists(event)) {
-                        EventRecord rec = new EventRecord();
-                        events.add(uid, System.currentTimeMillis(), eventDescriptions.getCode(event).getValue());
-                    } else {
-                        log("Important event received with invalid event number");
-                    }
-                }
-            } catch (IOException e) {
-                log("Exception caught while receiving an important event from an embedded system. Cause: " + e.toString());
-            }
-        } else if (initialTopic.equals(TopicStrings.embeddedStatusReport())) { // We have just been given our periodic status update from one of our systems.
-            // Time to compare values in our existing pool and update when necessary.
-            try {
-                JsonNode rootNode = objectMapper.readTree(contents);
-                JsonNode currentNode = rootNode.path(ArduinoPropertyStrings.uid());
-                if (currentNode.isMissingNode()) {
-                    log("Received status update without uid. Cannot update any values.");
-                    return;
-                }
-                TransientArduinoState trans = new TransientArduinoState();
-                TransientStateLastUpdated lastUpdated = trans.getLastUpdated();
-                final long currentTime = System.currentTimeMillis();
-                currentNode = rootNode.path(ArduinoPropertyStrings.timeOfDay());
-                if (!currentNode.isMissingNode()) {
-                    trans.setTimeOfDay(currentNode.asLong());
-                    lastUpdated.setTimeOfDay(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.reservoirLevel());
-                if (!currentNode.isMissingNode()) {
-                    trans.setReservoirLevel(currentNode.floatValue());
-                    lastUpdated.setReservoirLevel(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.nutrientSolutionLevel());
-                if (!currentNode.isMissingNode()) {
-                    trans.setNutrientSolutionLevel(currentNode.floatValue());
-                    lastUpdated.setNutrientSolutionLevel(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.lights());
-                if (!currentNode.isMissingNode()) {
-                    trans.setLights(currentNode.asBoolean());
-                    lastUpdated.setLights(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.powered());
-                if (!currentNode.isMissingNode()) {
-                    trans.setPowered(currentNode.asBoolean());
-                    lastUpdated.setPowered(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.doorsLocked());
-                if (!currentNode.isMissingNode()) {
-                    trans.setDoorsLocked(currentNode.asBoolean());
-                    lastUpdated.setLocked(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.doorsOpen());
-                if (!currentNode.isMissingNode()) {
-                    trans.setDoorsOpen(currentNode.asBoolean());
-                    lastUpdated.setDoorsOpen(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.timeLeftUnlocked());
-                if (!currentNode.isMissingNode()) {
-                    trans.setTimeLeftUnlocked(currentNode.asLong());
-                    lastUpdated.setTimeLeftUnlocked(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.upperChamberHumidity());
-                if (!currentNode.isMissingNode()) {
-                    trans.setUpperChamberHumidity(currentNode.floatValue());
-                    lastUpdated.setUpperChamberHumidity(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.upperChamberTemperature());
-                if (!currentNode.isMissingNode()) {
-                    trans.setUpperChamberTemperature(currentNode.floatValue());
-                    lastUpdated.setUpperChamberTemperature(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.lowerChamberTemperature());
-                if (!currentNode.isMissingNode()) {
-                    trans.setLowerChamberTemperature(currentNode.floatValue());
-                    lastUpdated.setLowerChamberTemperature(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.CO2PPM());
-                if (!currentNode.isMissingNode()) {
-                    trans.setCO2PPM(currentNode.asInt());
-                    lastUpdated.setCO2PPM(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.dehumidifying());
-                if (!currentNode.isMissingNode()) {
-                    trans.setDehumidifying(currentNode.asBoolean());
-                    lastUpdated.setDehumidifying(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.cooling());
-                if (!currentNode.isMissingNode()) {
-                    trans.setCooling(currentNode.asBoolean());
-                    lastUpdated.setCooling(currentTime);
-                }
-                currentNode = rootNode.path(ArduinoPropertyStrings.injectingCO2());
-                if (!currentNode.isMissingNode()) {
-                    trans.setInjectingCO2(currentNode.asBoolean());
-                    lastUpdated.setInjectingCO2(currentTime);
-                }
-            } catch (IOException e) {
-                log("Exception caught while receiving a routine update from an embedded system. Cause: " + e.toString());
-            }
-        } else {
-            log("Unknown MQTT topic received:" + topic);
-        }
-    }
-
-    // End of MQTT interface callbacks.
+    // Here are the classes implemended by me, Colin. :)
     public void connect() {
         MqttConnector con = new MqttConnector();
         con.doConnect();
         try {
             Thread.sleep(1000);
-        } catch (InterruptedException e) {
+        } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            log("Wait interrupted: " + e);
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
-        subscribe("+", 1);
-        subscribe(TopicStrings.embeddedHello(), 1);
+        // subscribe(TopicStrings.embeddedHello(), 2);
     }
 
     public void disconnect() {
@@ -258,30 +85,241 @@ public class Backend implements MqttCallback {
         sub.doSubscribe(topic, qos);
     }
 
+    public void publish(String topic, int qos, byte[] payload) {
+        Publisher pub = new Publisher();
+        pub.doPublish(topic, qos, payload);
+    }
+
+    // Logic to push configuration to embedded system.
     public void pushConfig(PersistentArduinoState arg) {
-        // Logic to push to embedded system.
+        log("Pushing configuration");
         ObjectMapper objectMapper = new ObjectMapper();
         String messageStr;
         try {
             messageStr = objectMapper.writeValueAsString(arg);
-        } catch (JsonProcessingException e) {
-            log("Problem writing JSON to string in pushConfig. Reason: " + e.getMessage());
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        String topic = TopicStrings.embeddedStatusReport();
+        String topic = TopicStrings.configPushToEmbedded();
         topic += "/";
-        topic += Long.toString(arg.getUID());
-        Publisher pub = new Publisher();
-        pub.doPublish(topic, 1, messageStr.getBytes());
+        topic += Long.toString(arg.getUid());
+        try {
+            client.publish(topic, messageStr.getBytes(), 2, true);
+        } catch (MqttException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        log("Config pushed. Topic string: " + topic + ", JSON: " + messageStr);
     }
 
+    // Required callbacks, implementing the MQTT library interface requirements.
+    @Override
+    public void connectionLost(Throwable cause) {
+        log("Connection lost! Cause" + cause.toString());
+        // connect();
+    }
+
+    @Override
+    public void deliveryComplete(IMqttDeliveryToken token) {
+        // Logic implementing what we do when we know stuff got delivered.
+        log("Delivery complete! " + token.toString());
+
+    }
+
+    @Override
+    public void messageArrived(String topic, MqttMessage message) throws MqttException {
+        log("Got a message.");
+        // Here is where the real fun begins. Most of what we do is in response to messages arriving into our system.
+        String splitTopic[] = topic.split("/");
+        if (splitTopic.length == 0) {
+            log("Received a message without any topic. Cannot do anything with it.");
+            return;
+        }
+        String initialTopic = splitTopic[0];
+        if (initialTopic.equals(TopicStrings.embeddedEvent())) { // We have been just informed of an event that is worth logging...
+            if (splitTopic.length < 2) {
+                log("No uid in topic string for embedded event message.");
+                return;
+            }
+            handleEmbeddedEvent(splitTopic, message);
+        } else if (initialTopic.equals(TopicStrings.embeddedTransientStatePush())) { // We have just been given our periodic status update from one of our systems.
+            // Time to compare values in our existing pool and update when necessary.
+            if (splitTopic.length < 2) {
+                log("No uid in topic string for embedded status report.");
+                return;
+            }
+            handleEmbeddedTransientStatePush(splitTopic, message);
+        } else if (initialTopic.equals(TopicStrings.systemsViewRequest())) {
+            handleSystemsViewRequest(message);
+        } else if (initialTopic.equals(TopicStrings.eventsViewRequest())) {
+            handleEventsViewRequest(message);
+        } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
+            handleStateControlRequest(message);
+        } else {
+            log("Unknown MQTT topic received: " + topic);
+        }
+    }
+
+    /*
+    protected void handleEmbeddedHello(MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        HelloMessageRepresentation hello;
+        try {
+            hello = objectMapper.readValue(message.toString(), HelloMessageRepresentation.class);
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        final long uid = hello.getUid();
+
+
+}
+     */
+    protected void handleEmbeddedEvent(String[] splitTopic, MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ArduinoEvent info;
+        try {
+            info = objectMapper.readValue(message.toString(), ArduinoEvent.class);
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        final long uid = info.getUid();
+        if (uid != Long.parseLong(splitTopic[1])) {
+            log("Event UID and topic mismatch in event received. UID = " + uid + ". Received data: " + splitTopic[1]);
+            return;
+        }
+        if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
+            events.add(uid, info.getTimestamp(), info.getEvent());
+            ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
+            log("Event \"" + descr.getDescription(info.getEvent()) + "\"added to log.");
+        } else {
+            log("Received event for unknown device.");
+        }
+    }
+
+    protected void handleEmbeddedTransientStatePush(String[] splitTopic, MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        EmbeddedStatusReport info;
+        try {
+            info = objectMapper.readValue(message.toString(), EmbeddedStatusReport.class);
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        if (info.getUid() != Long.parseLong(splitTopic[1])) {
+            log("Transient state UID and topic mismatch. UID = " + info.getUid() + ".Received data: " + splitTopic[1]);
+            return;
+        }
+        final long uid = info.getUid();
+        if (systems.containsKey(info.getUid())) {
+            ArduinoProxy proxy = systems.get(info.getUid());
+            proxy.updateTransientState(info.makeFromTransientState());
+            systems.replace(info.getUid(), proxy);
+            log("Status report for " + info.getUid() + " received.");
+        } else {
+            ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
+            proxy.setTargetUpperChamberHumidity(70.0f);
+            PersistentArduinoState state = proxy.extractPersistentState();
+            state.setUid(uid);
+            proxy.updatePersistentState(state);
+            systems.put(uid, proxy);
+            subscribeToEmbeddedSystem(uid);
+            pushConfig(proxy.extractPersistentState());
+        }
+    }
+
+
+    protected void handleSystemsViewRequest(MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        List<ArduinoProxy> responseData = new ArrayList<>();
+        String responseStr = "";
+/*
+        try {
+            responseStr = objectMapper.writeValueAsString(responseData);
+
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        */
+        // Publish response over MQTT
+
+        publish(TopicStrings.systemsViewResponse(), 2, responseStr.getBytes());
+    }
+
+    protected void handleEventsViewRequest(MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        EventsViewRequestRepresentation request;
+        try {
+            request = objectMapper.readValue(message.toString(), EventsViewRequestRepresentation.class);
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        /*
+        EventsViewResponseRepresentation responseData = new EventsViewResponseRepresentation();
+        Pair<Boolean, ArrayDeque<EventRecord>> records = events.getEvents(request.getUid());
+        responseData.setEvents(records.getValue());
+        responseData.setUid(request.getUid());
+        String responseStr = "";
+        try {
+            responseStr = objectMapper.writeValueAsString(responseData);
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        publish(TopicStrings.eventsViewResponse(), 2, responseStr.getBytes());
+*/
+    }
+
+    protected void handleStateControlRequest(MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        PersistentArduinoState request;
+        try {
+            request = objectMapper.readValue(message.toString(), PersistentArduinoState.class);
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        }
+        // Send the control message to the relevant embedded devices
+
+    }
+
+    protected void subscribeToEmbeddedSystem(long uid) {
+        String statusReportTopic = TopicStrings.embeddedTransientStatePush();
+        statusReportTopic += "/";
+        statusReportTopic += uid;
+        subscribe(statusReportTopic, 2);
+        String eventTopic = TopicStrings.embeddedEvent();
+        eventTopic += "/";
+        eventTopic += uid;
+        subscribe(eventTopic, 2);
+    }
+
+// End of MQTT interface callbacks.
     // The following are async helper classes from https://github.com/eclipse/paho.mqtt.java
     public class MqttConnector {
 
         public void doConnect() {
             // Connect to the server. Get a token and setup an asynchronous listener on the token which will be notified once the connect completes.
             log("Connecting to " + brokerURL + " with client ID " + client.getClientId());
-
             IMqttActionListener conListener;
             conListener = new IMqttActionListener() {
                 @Override
@@ -293,7 +331,6 @@ public class Backend implements MqttCallback {
 
                 @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                    ex = exception;
                     // state = ERROR;
                     log("Connect failed" + exception);
                     carryOn();
@@ -302,7 +339,6 @@ public class Backend implements MqttCallback {
                 public void carryOn() {
                     synchronized (waiter) {
                         // state = ERROR;
-                        doNext = true;
                         waiter.notifyAll();
                     }
                 }
@@ -311,10 +347,10 @@ public class Backend implements MqttCallback {
             try {
                 // Connect using a non-blocking connect.
                 client.connect(connectionOptions, "Connect sample context", conListener);
-            } catch (MqttException e) {
+            } catch (MqttException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+
                 // If though it is a non-blocking connect an exception can be thrown if validation of params fails or other checks such as already connected fail.
-                doNext = true;
-                ex = e;
             }
         }
     }
@@ -343,7 +379,6 @@ public class Backend implements MqttCallback {
 
                 @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                    ex = exception;
                     log("Publish failed" + exception);
                     // state = ERROR;
                     carryOn();
@@ -351,7 +386,6 @@ public class Backend implements MqttCallback {
 
                 public void carryOn() {
                     synchronized (waiter) {
-                        doNext = true;
                         waiter.notifyAll();
                     }
                 }
@@ -360,10 +394,10 @@ public class Backend implements MqttCallback {
             try {
                 // Publish the message
                 client.publish(topicName, message, "Pub sample context", pubListener);
-            } catch (MqttException e) {
+            } catch (MqttException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+
                 // state = ERROR;
-                doNext = true;
-                ex = e;
             }
         }
     }
@@ -387,7 +421,6 @@ public class Backend implements MqttCallback {
 
                 @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                    ex = exception;
                     // state = ERROR;
                     log("Subscribe failed" + exception);
                     carryOn();
@@ -395,7 +428,6 @@ public class Backend implements MqttCallback {
 
                 public void carryOn() {
                     synchronized (waiter) {
-                        doNext = true;
                         waiter.notifyAll();
                     }
                 }
@@ -403,10 +435,9 @@ public class Backend implements MqttCallback {
 
             try {
                 client.subscribe(topicName, qos, "Subscribe sample context", subListener);
-            } catch (MqttException e) {
-                // state = ERROR;
-                doNext = true;
-                ex = e;
+            } catch (MqttException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+
             }
         }
     }
@@ -429,7 +460,6 @@ public class Backend implements MqttCallback {
 
                 @Override
                 public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                    ex = exception;
                     log("Disconnect failed" + exception);
                     // state = ERROR;
                     carryOn();
@@ -437,7 +467,6 @@ public class Backend implements MqttCallback {
 
                 public void carryOn() {
                     synchronized (waiter) {
-                        doNext = true;
                         waiter.notifyAll();
                     }
                 }
@@ -445,10 +474,9 @@ public class Backend implements MqttCallback {
 
             try {
                 client.disconnect("Disconnect", discListener);
-            } catch (MqttException e) {
-                // state = ERROR;
-                doNext = true;
-                ex = e;
+            } catch (MqttException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+
             }
         }
     }
@@ -461,8 +489,9 @@ public class Backend implements MqttCallback {
 
     protected EventPool events = new EventPool(1000);
     protected HashMap<Long, ArduinoProxy> systems = new HashMap<>();
-    protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
+    protected HashMap<Long, Long> lastUpdated = new HashMap<>();
     protected HashMap<Long, String> systemDescriptions = new HashMap<>();
+    protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
 
     //MQTT related
     protected String brokerURL = "tcp://127.0.0.1:1883";
@@ -470,9 +499,5 @@ public class Backend implements MqttCallback {
     protected boolean logging;
     protected MqttConnectOptions connectionOptions;
 
-    // protected boolean clean;
-    protected Throwable ex = null;
     protected Object waiter = new Object();
-    protected boolean doNext = false;
-
 }

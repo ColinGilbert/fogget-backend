@@ -21,7 +21,7 @@ public class MainExecutable {
         app.setLogging(true);
         System.out.println("Starting backend!");
         try {
-            app.init(true);
+            app.init();
         } catch (MqttException e) {
             System.out.println("Caught mqqtexception initializing backend. " + e);
         }
