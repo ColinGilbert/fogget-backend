@@ -4,6 +4,8 @@
  * and open the template in the editor.
  */
 package noob.plantsystem.backend;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.eclipse.paho.client.mqttv3.MqttException;
 
 /**
@@ -26,5 +28,14 @@ public class MainExecutable {
             System.out.println("Caught mqqtexception initializing backend. " + e);
         }
         app.connect();
+        
+        while(true) {
+            app.pushStateData();
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException ex) {
+                Logger.getLogger(MainExecutable.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        }
     }
 }

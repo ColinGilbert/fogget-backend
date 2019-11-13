@@ -7,7 +7,7 @@ package noob.plantsystem.backend;
 
 import java.util.List;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.TreeMap;
 import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.Collections;
@@ -24,7 +24,7 @@ public class EventPool {
 
     public EventPool(int bufferSize) {
         capacity = bufferSize;
-        events = new HashMap<>();
+        events = new TreeMap<>();
     }
 
     public synchronized void add(long uidArg, long timestampArg, int eventArg) {
@@ -54,7 +54,11 @@ public class EventPool {
         }
     }
     
-    protected HashMap<Long, ArrayDeque<EventRecord>> events;
+    public TreeMap<Long, ArrayDeque<EventRecord>> getRaw() {
+        return events;
+    }
+    
+    protected TreeMap<Long, ArrayDeque<EventRecord>> events;
     protected ArduinoEventDescriptions descriptions;
     int capacity;
 }

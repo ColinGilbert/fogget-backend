@@ -41,6 +41,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.ArrayDeque;
+import java.util.Scanner;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javafx.util.Pair;
@@ -62,7 +63,6 @@ public class Backend implements MqttCallback {
         logging = arg;
     }
 
-    // Here are the classes implemended by me, Colin. :)
     public void connect() {
         MqttConnector con = new MqttConnector();
         con.doConnect();
@@ -72,7 +72,9 @@ public class Backend implements MqttCallback {
             Thread.currentThread().interrupt();
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
-        // subscribe(TopicStrings.embeddedHello(), 2);
+        // subscribe(TopicStrings.systemsViewRequest(), 2);
+        // subscribe(TopicStrings.eventsViewRequest(), 2);
+        subscribe(TopicStrings.stateControlRequest() , 2);
     }
 
     public void disconnect() {
@@ -111,7 +113,45 @@ public class Backend implements MqttCallback {
         }
         log("Config pushed. Topic string: " + topic + ", JSON: " + messageStr);
     }
+    
+ 
+    public void pushStateData() {
+           ObjectMapper mapper = new ObjectMapper();
+        try {
+            Socket socket = new Socket("127.0.0.1", 6777);
+            // Scanner tcpIn = new Scanner(socket.getInputStream());
+            PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+            tcpOut.println("PUT");
+            ArrayList<ArduinoProxy> proxies = new ArrayList<>();
+            for (long k : systems.keySet()) {
+                proxies.add(systems.get(k));
+            }
+            String info = mapper.writeValueAsString(proxies);
+            tcpOut.println(info);    
+            
+            System.out.println("Sent state data to local broker: " + info);
 
+        } catch (IOException ex) {
+                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        try {
+            Socket socket = new Socket("127.0.0.1", 6789);
+            Scanner tcpIn = new Scanner(socket.getInputStream());
+            PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+            tcpOut.println("PUT");
+            String info = mapper.writeValueAsString(events.getRaw());
+            tcpOut.println(info);
+           
+            // return mapper.readValue(response, new TypeReference<TreeMap<Long, ArrayDeque<EventRecord>>>() {});            
+            // out.println(scanner.nextLine());
+            System.out.println("Sent event data to local broker: " + info);
+
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+        
+     
     // Required callbacks, implementing the MQTT library interface requirements.
     @Override
     public void connectionLost(Throwable cause) {
@@ -150,10 +190,13 @@ public class Backend implements MqttCallback {
             }
             handleEmbeddedTransientStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.systemsViewRequest())) {
+            log("Got systems view request");
             handleSystemsViewRequest(message);
         } else if (initialTopic.equals(TopicStrings.eventsViewRequest())) {
+            log("Got events view request");
             handleEventsViewRequest(message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
+            log("Got state control request");
             handleControllerRequest(message);
         } else {
             log("Unknown MQTT topic received: " + topic);
@@ -222,6 +265,7 @@ public class Backend implements MqttCallback {
     }
 
     protected void handleSystemsViewRequest(MqttMessage message) {
+        /*
         ObjectMapper objectMapper = new ObjectMapper();
         List<ArduinoProxy> responseData = new ArrayList<>();
         for (long k : systems.keySet()) {
@@ -230,16 +274,18 @@ public class Backend implements MqttCallback {
         String responseStr = "";
         try {
             responseStr = objectMapper.writeValueAsString(responseData);
-
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
         // Publish response over MQTT
         publish(TopicStrings.systemsViewResponse(), 2, responseStr.getBytes());
+        log("System view request responded.");
+        */
     }
 
     protected void handleEventsViewRequest(MqttMessage message) {
+        /*
         ObjectMapper objectMapper = new ObjectMapper();
         EventsViewRequestRepresentation request;
         try {
@@ -259,6 +305,7 @@ public class Backend implements MqttCallback {
             try {
                 responseStr = objectMapper.writeValueAsString(data.getValue());
                 publish(TopicStrings.eventsViewResponse(), 2, responseStr.getBytes());
+            log("Events view request responded to. UID: " + uid);
 
             } catch (JsonProcessingException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -267,6 +314,7 @@ public class Backend implements MqttCallback {
         } else {
             log("Invalid uid for events request: " + uid);
         }
+        */
     }
 
     protected void handleControllerRequest(MqttMessage message) {
@@ -296,7 +344,7 @@ public class Backend implements MqttCallback {
         subscribe(eventTopic, 2);
     }
 
-// End of MQTT interface callbacks.
+
     // The following are async helper classes from https://github.com/eclipse/paho.mqtt.java
     public class MqttConnector {
 
