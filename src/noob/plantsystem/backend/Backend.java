@@ -69,8 +69,9 @@ public class Backend implements MqttCallback {
     public void init() throws MqttException {
         connectionOptions = new MqttConnectOptions();
         connectionOptions.setCleanSession(false);
-        client = new MqttAsyncClient(brokerURL, Long.toString(1), new MemoryPersistence());
+        client = new MqttAsyncClient(brokerURL, MqttAsyncClient.generateClientId(), new MemoryPersistence());
         client.setCallback(this);
+
     }
 
     void setLogging(boolean arg) {
@@ -88,6 +89,9 @@ public class Backend implements MqttCallback {
         }
 
         subscribe(TopicStrings.stateControlRequest(), 2);
+        subscribe(TopicStrings.embeddedTransientStatePush(), 2);
+        subscribe(TopicStrings.embeddedEvent(), 2);
+
     }
 
     public void disconnect() {
@@ -193,10 +197,10 @@ public class Backend implements MqttCallback {
             handleEmbeddedEvent(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.embeddedTransientStatePush())) { // We have just been given our periodic status update from one of our systems.
             // Time to compare values in our existing pool and update when necessary.
-            if (splitTopic.length < 2) {
-                log("No uid in topic string for embedded status report.");
-                return;
-            }
+          //  if (splitTopic.length < 2) {
+          //      log("No uid in topic string for embedded status report.");
+          //      return;
+          //  }
             handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             log("Got state control request");
@@ -240,10 +244,10 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        if (info.getUid() != Long.parseLong(splitTopic[1])) {
-            log("Transient state UID and topic mismatch. UID = " + info.getUid() + ".Received data: " + splitTopic[1]);
-            return;
-        }
+     //   if (info.getUid() != Long.parseLong(splitTopic[1])) {
+      //      log("Transient state UID and topic mismatch. UID = " + info.getUid() + ".Received data: " + splitTopic[1]);
+       //     return;
+      //  }
         final long uid = info.getUid();
         if (systems.containsKey(info.getUid())) {
             systems.replace(info.getUid(), info);
