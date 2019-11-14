@@ -52,6 +52,20 @@ import javafx.util.Pair;
  */
 public class Backend implements MqttCallback {
 
+    protected EventPool events = new EventPool(1000);
+    protected TreeMap<Long, ArduinoProxy> systems = new TreeMap<>();
+    // protected TreeMap<Long, Long> lastUpdated = new TreeMap<>();
+    protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
+    protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
+
+    //MQTT related
+    protected String brokerURL = "tcp://127.0.0.1:1883";
+    protected MqttAsyncClient client;
+    protected boolean logging;
+    protected MqttConnectOptions connectionOptions;
+
+    protected Object waiter = new Object();
+
     public void init() throws MqttException {
         connectionOptions = new MqttConnectOptions();
         connectionOptions.setCleanSession(false);
@@ -72,9 +86,8 @@ public class Backend implements MqttCallback {
             Thread.currentThread().interrupt();
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
-        // subscribe(TopicStrings.systemsViewRequest(), 2);
-        // subscribe(TopicStrings.eventsViewRequest(), 2);
-        subscribe(TopicStrings.stateControlRequest() , 2);
+
+        subscribe(TopicStrings.stateControlRequest(), 2);
     }
 
     public void disconnect() {
@@ -113,10 +126,9 @@ public class Backend implements MqttCallback {
         }
         log("Config pushed. Topic string: " + topic + ", JSON: " + messageStr);
     }
-    
- 
+
     public void pushStateData() {
-           ObjectMapper mapper = new ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket("127.0.0.1", 6777);
             // Scanner tcpIn = new Scanner(socket.getInputStream());
@@ -127,12 +139,11 @@ public class Backend implements MqttCallback {
                 proxies.add(systems.get(k));
             }
             String info = mapper.writeValueAsString(proxies);
-            tcpOut.println(info);    
-            
-            System.out.println("Sent state data to local broker: " + info);
+            tcpOut.println(info);
 
+            //System.out.println("Sent state data to local broker: " + info);
         } catch (IOException ex) {
-                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
         try {
             Socket socket = new Socket("127.0.0.1", 6789);
@@ -141,17 +152,15 @@ public class Backend implements MqttCallback {
             tcpOut.println("PUT");
             String info = mapper.writeValueAsString(events.getRaw());
             tcpOut.println(info);
-           
+
             // return mapper.readValue(response, new TypeReference<TreeMap<Long, ArrayDeque<EventRecord>>>() {});            
             // out.println(scanner.nextLine());
-            System.out.println("Sent event data to local broker: " + info);
-
+            //System.out.println("Sent event data to local broker: " + info);
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
     }
-        
-     
+
     // Required callbacks, implementing the MQTT library interface requirements.
     @Override
     public void connectionLost(Throwable cause) {
@@ -162,13 +171,12 @@ public class Backend implements MqttCallback {
     @Override
     public void deliveryComplete(IMqttDeliveryToken token) {
         // Logic implementing what we do when we know stuff got delivered.
-        log("Delivery complete! " + token.toString());
+        // log("Delivery complete! " + token.toString());
 
     }
 
     @Override
     public void messageArrived(String topic, MqttMessage message) throws MqttException {
-        log("Got a message.");
         // Here is where the real fun begins. Most of what we do is in response to messages arriving into our system.
         String splitTopic[] = topic.split("/");
         if (splitTopic.length == 0) {
@@ -181,6 +189,7 @@ public class Backend implements MqttCallback {
                 log("No uid in topic string for embedded event message.");
                 return;
             }
+            log("Got and event! ");
             handleEmbeddedEvent(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.embeddedTransientStatePush())) { // We have just been given our periodic status update from one of our systems.
             // Time to compare values in our existing pool and update when necessary.
@@ -188,13 +197,7 @@ public class Backend implements MqttCallback {
                 log("No uid in topic string for embedded status report.");
                 return;
             }
-            handleEmbeddedTransientStatePush(splitTopic, message);
-        } else if (initialTopic.equals(TopicStrings.systemsViewRequest())) {
-            log("Got systems view request");
-            handleSystemsViewRequest(message);
-        } else if (initialTopic.equals(TopicStrings.eventsViewRequest())) {
-            log("Got events view request");
-            handleEventsViewRequest(message);
+            handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             log("Got state control request");
             handleControllerRequest(message);
@@ -205,9 +208,9 @@ public class Backend implements MqttCallback {
 
     protected void handleEmbeddedEvent(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        ArduinoEvent info;
+        Integer info;
         try {
-            info = objectMapper.readValue(message.toString(), ArduinoEvent.class);
+            info = objectMapper.readValue(message.toString(), Integer.class);
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
@@ -215,25 +218,21 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        final long uid = info.getUid();
-        if (uid != Long.parseLong(splitTopic[1])) {
-            log("Event UID and topic mismatch in event received. UID = " + uid + ". Received data: " + splitTopic[1]);
-            return;
-        }
+        long uid = Long.parseLong(splitTopic[1]);
         if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
-            events.add(uid, info.getTimestamp(), info.getEvent());
+            events.add(uid, System.currentTimeMillis(), info);
             ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
-            log("Event \"" + descr.getDescription(info.getEvent()) + "\"added to log.");
+            log("Event \"" + info + "\" added to log.");
         } else {
-            log("Received event for unknown device.");
+            log("Received event for unknown device  " + uid);
         }
     }
 
-    protected void handleEmbeddedTransientStatePush(String[] splitTopic, MqttMessage message) {
+    protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        EmbeddedStatusReport info;
+        ArduinoProxy info;
         try {
-            info = objectMapper.readValue(message.toString(), EmbeddedStatusReport.class);
+            info = objectMapper.readValue(message.toString(), ArduinoProxy.class);
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
@@ -247,81 +246,33 @@ public class Backend implements MqttCallback {
         }
         final long uid = info.getUid();
         if (systems.containsKey(info.getUid())) {
-            ArduinoProxy proxy = systems.get(info.getUid());
-            proxy.updateTransientState(info.makeFromTransientState());
-            systems.replace(info.getUid(), proxy);
-            log("Status report for " + info.getUid() + " received.");
+            systems.replace(info.getUid(), info);
+            // ArduinoProxy proxy = systems.get(info.getUid());
+            // proxy.updateTransientState(info.extractTransientState());
+            // systems.replace(info.getUid(), proxy);
+            // log("Status report for " + info.getUid() + " received.");
         } else {
             ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
-            PersistentArduinoState state = proxy.extractPersistentState();
-            state.setUid(uid);
-            proxy.updatePersistentState(state);
+            //PersistentArduinoState state = proxy.extractPersistentState();
+            proxy.setUid(uid);
             systems.put(uid, proxy);
             subscribeToEmbeddedSystem(uid);
+
             ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
-            representation.updateConfigValues(state);
+            representation.updateConfigValues(info);
+            representation.changeAll();
             pushConfig(representation);
         }
     }
 
-    protected void handleSystemsViewRequest(MqttMessage message) {
-        /*
-        ObjectMapper objectMapper = new ObjectMapper();
-        List<ArduinoProxy> responseData = new ArrayList<>();
-        for (long k : systems.keySet()) {
-            responseData.add(systems.get(k));
-        }
-        String responseStr = "";
-        try {
-            responseStr = objectMapper.writeValueAsString(responseData);
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        }
-        // Publish response over MQTT
-        publish(TopicStrings.systemsViewResponse(), 2, responseStr.getBytes());
-        log("System view request responded.");
-        */
-    }
-
-    protected void handleEventsViewRequest(MqttMessage message) {
-        /*
-        ObjectMapper objectMapper = new ObjectMapper();
-        EventsViewRequestRepresentation request;
-        try {
-            request = objectMapper.readValue(message.toString(), EventsViewRequestRepresentation.class);
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        }
-        final long uid = request.getUid();
-        Pair<Boolean, ArrayDeque<EventRecord>> data = events.getEvents(uid);
-        if (data.getKey()) {
-            String responseStr = "";
-            try {
-                responseStr = objectMapper.writeValueAsString(data.getValue());
-                publish(TopicStrings.eventsViewResponse(), 2, responseStr.getBytes());
-            log("Events view request responded to. UID: " + uid);
-
-            } catch (JsonProcessingException ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-                return;
-            }
-        } else {
-            log("Invalid uid for events request: " + uid);
-        }
-        */
-    }
-
     protected void handleControllerRequest(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        PersistentArduinoState request;
+        ArrayList<ArduinoConfigChangeRepresentation> requestItems = new ArrayList<>();
+        log("Got a request to change state!");
+//readValue(response, new TypeReference<ArrayList<ArduinoProxy>>() {} )
         try {
-            request = objectMapper.readValue(message.toString(), PersistentArduinoState.class);
+            requestItems = objectMapper.readValue(message.toString(), new TypeReference<ArrayList<ArduinoConfigChangeRepresentation>>() {
+            });
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
@@ -330,6 +281,43 @@ public class Backend implements MqttCallback {
             return;
         }
         // Send the control message to the relevant embedded devices
+        for (ArduinoConfigChangeRepresentation req : requestItems) {
+            PersistentArduinoState state = new PersistentArduinoState();
+            if (req.isChangingMistingInterval()) {
+                state.setMistingInterval(req.getMistingInterval());
+            }
+            if (req.isChangingMistingDuration()) {
+                state.setMistingInterval(req.getMistingDuration());
+            }
+            if (req.isChangingStatusPushInterval()) {
+                state.setStatusPushInterval(req.getStatusPushInterval());
+            }
+            if (req.isChangingNutrientsPPM()) {
+                state.setNutrientsPPM(req.getNutrientsPPM());
+            }
+            if (req.isChangingNutrientSolutionRatio()) {
+                state.setNutrientSolutionRatio(req.getNutrientSolutionRatio());
+            }
+            if (req.isChangingLightsOnTime()) {
+                state.setLightsOnTime(req.getLightsOnTime());
+            }
+            if (req.isChangingLightsOffTime()) {
+                state.setLightsOffTime(req.getLightsOffTime());
+            }
+            if (req.isChangingTargetUpperChamberTemperature()) {
+                state.setTargetUpperChamberTemperature(req.getTargetLowerChamberTemperature());
+            }
+            if (req.isChangingTargetUpperChamberHumidity()) {
+                state.setTargetUpperChamberHumidity(req.getTargetUpperChamberHumidity());
+            }
+            if (req.isChangingTargetLowerChamberTemperature()) {
+                state.setTargetLowerChamberTemperature(req.getTargetLowerChamberTemperature());
+            }
+            if (req.isChangingTargetCO2PPM()) {
+                state.setTargetCO2PPM(req.getTargetCO2PPM());
+            }
+            pushConfig(req);
+        }
 
     }
 
@@ -343,7 +331,6 @@ public class Backend implements MqttCallback {
         eventTopic += uid;
         subscribe(eventTopic, 2);
     }
-
 
     // The following are async helper classes from https://github.com/eclipse/paho.mqtt.java
     public class MqttConnector {
@@ -518,17 +505,4 @@ public class Backend implements MqttCallback {
         }
     }
 
-    protected EventPool events = new EventPool(1000);
-    protected TreeMap<Long, ArduinoProxy> systems = new TreeMap<>();
-    // protected TreeMap<Long, Long> lastUpdated = new TreeMap<>();
-    protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
-    protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
-
-    //MQTT related
-    protected String brokerURL = "tcp://127.0.0.1:1883";
-    protected MqttAsyncClient client;
-    protected boolean logging;
-    protected MqttConnectOptions connectionOptions;
-
-    protected Object waiter = new Object();
 }
