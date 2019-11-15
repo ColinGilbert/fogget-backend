@@ -93,7 +93,7 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
         subscribe(TopicStrings.stateControlRequest(), 2);
-        subscribe(TopicStrings.embeddedTransientStatePush(), 0);
+        subscribe(TopicStrings.embeddedStatePush(), 0);
         // subscribe(TopicStrings.embeddedEvent(), 2);
     }
 
@@ -150,7 +150,6 @@ public class Backend implements MqttCallback {
         ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket(uiCommIP, uiCommPort);
-            // Scanner tcpIn = new Scanner(socket.getInputStream());
             PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
             tcpOut.println("PUTDESCRIPTIONS");
             TreeMap<Long, String> results = new TreeMap<>();
@@ -170,7 +169,6 @@ public class Backend implements MqttCallback {
         ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket(uiCommIP, uiCommPort);
-            // Scanner tcpIn = new Scanner(socket.getInputStream());
             PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
             tcpOut.println("PUTEVENTS");
             TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
@@ -236,7 +234,7 @@ public class Backend implements MqttCallback {
             }
             log("Got and event! ");
             handleEmbeddedEvent(splitTopic, message);
-        } else if (initialTopic.equals(TopicStrings.embeddedTransientStatePush())) { // We have just been given our periodic status update from one of our systems.
+        } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systems.
             handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             log("Got state control request");
@@ -326,7 +324,7 @@ public class Backend implements MqttCallback {
     }
 
     protected void subscribeToEmbeddedSystem(long uid) {
-        String statusReportTopic = TopicStrings.embeddedTransientStatePush();
+        String statusReportTopic = TopicStrings.embeddedStatePush();
         statusReportTopic += "/";
         statusReportTopic += uid;
         subscribe(statusReportTopic, 0);
