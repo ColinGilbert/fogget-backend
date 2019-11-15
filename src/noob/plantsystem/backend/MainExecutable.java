@@ -30,7 +30,10 @@ public class MainExecutable {
         app.connect();
         
         while(true) {
-            app.pushStateData();
+            app.pushStateDataToUI();
+            app.pushEventsToUI();
+            app.pushDescriptionsToUI();
+            app.cullAbsentSystems();
             try {
                 Thread.sleep(10);
             } catch (InterruptedException ex) {
