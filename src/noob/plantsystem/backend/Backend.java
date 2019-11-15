@@ -41,6 +41,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.ArrayDeque;
+import java.util.HashSet;
 import java.util.Scanner;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -52,12 +53,13 @@ import javafx.util.Pair;
  */
 public class Backend implements MqttCallback {
 
-    final protected long embeddedTimeout = 500;
+    final protected long embeddedTimeout = 5000;
     final protected String uiCommIP = "127.0.0.1";
     final protected int uiCommPort = 6777;
     protected EventPool events = new EventPool(1000);
     protected TreeMap<Long, ArduinoProxy> systems = new TreeMap<>();
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
+    protected HashSet<Long> liveSystems = new HashSet<>();
     protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
 
     protected long currentTime;
@@ -90,7 +92,7 @@ public class Backend implements MqttCallback {
             Thread.currentThread().interrupt();
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
-        // subscribe(TopicStrings.stateControlRequest(), 2);
+        subscribe(TopicStrings.stateControlRequest(), 2);
         subscribe(TopicStrings.embeddedTransientStatePush(), 0);
         // subscribe(TopicStrings.embeddedEvent(), 2);
     }
@@ -110,15 +112,12 @@ public class Backend implements MqttCallback {
         pub.doPublish(topic, qos, payload);
     }
 
-    public void cullAbsentSystems() {
+    public void markAbsentSystems() {
         long now = System.currentTimeMillis();
         for (Long key : systems.keySet()) {
             ArduinoProxy p = systems.get(key);
             if ((now - p.getTimestamp()) > embeddedTimeout) {
-                systems.remove(key);
-                if (systemDescriptions.containsKey(key)) {
-                    systemDescriptions.remove(key);
-                }
+                liveSystems.remove(key);
             }
         }
     }
@@ -154,7 +153,13 @@ public class Backend implements MqttCallback {
             // Scanner tcpIn = new Scanner(socket.getInputStream());
             PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
             tcpOut.println("PUTDESCRIPTIONS");
-            String info = mapper.writeValueAsString(systemDescriptions);
+            TreeMap<Long, String> results = new TreeMap<>();
+            for (long key : systemDescriptions.keySet()) {
+                if (liveSystems.contains(key)) {
+                    results.put(key, systemDescriptions.get(key));
+                }
+            }
+            String info = mapper.writeValueAsString(results);
             tcpOut.println(info);
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -168,7 +173,13 @@ public class Backend implements MqttCallback {
             // Scanner tcpIn = new Scanner(socket.getInputStream());
             PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
             tcpOut.println("PUTEVENTS");
-            String info = mapper.writeValueAsString(events.getRaw());
+            TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
+            for (long key : events.getRaw().keySet()) {
+                if (liveSystems.contains(key)) {
+                    results.put(key, events.getRaw().get(key));
+                }
+            }
+            String info = mapper.writeValueAsString(results);
             tcpOut.println(info);
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -182,7 +193,13 @@ public class Backend implements MqttCallback {
             // Scanner tcpIn = new Scanner(socket.getInputStream());
             PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
             tcpOut.println("PUTPROXIES");
-            String info = mapper.writeValueAsString(systems);
+            TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
+            for (long key : systems.keySet()) {
+                if (liveSystems.contains(key)) {
+                    results.put(key, systems.get(key));
+                }
+            }
+            String info = mapper.writeValueAsString(results);
             tcpOut.println(info);
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -265,15 +282,19 @@ public class Backend implements MqttCallback {
         }
         final long uid = info.getUid();
         info.setTimestamp(System.currentTimeMillis());
-        if (systems.containsKey(info.getUid())) {
-            systems.replace(info.getUid(), info);
+        if (systems.containsKey(uid)) {
+            if (!liveSystems.contains(uid)) {
+                liveSystems.add(uid);
+                log("Re-adding to live systems!");
+            }
+            systems.replace(uid, info);
         } else {
             ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
             proxy.setUid(uid);
             systems.put(uid, proxy);
             subscribeToEmbeddedSystem(uid);
             ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
-            representation.setUid(info.getUid());
+            representation.setUid(uid);
             representation.updateConfigValues(info);
             representation.changeAll();
             pushConfig(representation);
@@ -297,7 +318,10 @@ public class Backend implements MqttCallback {
         }
         // Send the control message to the relevant embedded devices
         for (ArduinoConfigChangeRepresentation req : requestItems) {
-            pushConfig(req);
+            if (req.hasChanges()) {
+                pushConfig(req);
+                log("Sending a control packet");
+            }
         }
     }
 
@@ -393,8 +417,6 @@ public class Backend implements MqttCallback {
                 client.publish(topicName, message, "Pub sample context", pubListener);
             } catch (MqttException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-
-                // state = ERROR;
             }
         }
     }
@@ -434,7 +456,6 @@ public class Backend implements MqttCallback {
                 client.subscribe(topicName, qos, "Subscribe sample context", subListener);
             } catch (MqttException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-
             }
         }
     }
@@ -473,7 +494,6 @@ public class Backend implements MqttCallback {
                 client.disconnect("Disconnect", discListener);
             } catch (MqttException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-
             }
         }
     }

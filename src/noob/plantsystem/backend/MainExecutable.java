@@ -33,7 +33,7 @@ public class MainExecutable {
             app.pushStateDataToUI();
             app.pushEventsToUI();
             app.pushDescriptionsToUI();
-            app.cullAbsentSystems();
+            app.markAbsentSystems();
             try {
                 Thread.sleep(10);
             } catch (InterruptedException ex) {
