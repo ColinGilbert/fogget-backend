@@ -93,8 +93,8 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
         subscribe(TopicStrings.stateControlRequest(), 2);
+        subscribe(TopicStrings.descriptionsUpdateRequest(), 2);
         subscribe(TopicStrings.embeddedStatePush(), 0);
-        // subscribe(TopicStrings.embeddedEvent(), 2);
     }
 
     public void disconnect() {
@@ -152,13 +152,7 @@ public class Backend implements MqttCallback {
             Socket socket = new Socket(uiCommIP, uiCommPort);
             PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
             tcpOut.println("PUTDESCRIPTIONS");
-            TreeMap<Long, String> results = new TreeMap<>();
-            for (long key : systemDescriptions.keySet()) {
-                if (liveSystems.contains(key)) {
-                    results.put(key, systemDescriptions.get(key));
-                }
-            }
-            String info = mapper.writeValueAsString(results);
+            String info = mapper.writeValueAsString(systemDescriptions);
             tcpOut.println(info);
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -232,15 +226,38 @@ public class Backend implements MqttCallback {
                 log("No uid in topic string for embedded event message.");
                 return;
             }
-            log("Got and event! ");
+            log("Got an event");
             handleEmbeddedEvent(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systems.
             handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             log("Got state control request");
             handleControllerRequest(message);
+        } else if (initialTopic.equals(TopicStrings.descriptionsUpdateRequest())) {
+            log("Got description update request");
+            handleDescriptionUpdate(message);
         } else {
             log("Unknown MQTT topic received: " + topic);
+        }
+    }
+
+    protected void handleDescriptionUpdate(MqttMessage message) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        try {
+            TreeMap<Long, String> info = objectMapper.readValue(message.toString(), new TypeReference<TreeMap<Long, String>>() {
+            });
+            for (long k : info.keySet()) {
+                String desc = info.get(k);
+                systemDescriptions.put(k, desc);
+                log("Description for UID " + k + ": " + desc);
+                
+            }
+        } catch (JsonProcessingException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            return;
         }
     }
 
