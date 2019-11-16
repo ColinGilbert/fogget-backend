@@ -38,8 +38,16 @@ import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayDeque;
 import java.util.HashSet;
 import java.util.Scanner;
@@ -61,7 +69,8 @@ public class Backend implements MqttCallback {
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
     protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
-
+    final String stateSaveFileName = "SYSTEMS.SAVE";
+    final String descriptionsSaveFileName = "DESCRIPTIONS.SAVE";
     protected long currentTime;
     //MQTT related
     protected String brokerURL = "tcp://127.0.0.1:1883";
@@ -120,6 +129,83 @@ public class Backend implements MqttCallback {
                 liveSystems.remove(key);
             }
         }
+    }
+
+    public boolean saveSystems() {
+        boolean success = true;
+        File tentativePath = new File(stateSaveFileName + ".TEMP");
+        try {
+            FileOutputStream fileOut = new FileOutputStream(tentativePath);
+            ObjectMapper objMapper = new ObjectMapper();
+            objMapper.writeValue(fileOut, systems);
+            fileOut.flush();
+            success = tentativePath.renameTo(new File(stateSaveFileName));
+            fileOut.close();
+        } catch (FileNotFoundException ex) {
+            success = false;
+        } catch (IOException ex) {
+            success = false;
+        } finally {
+        }
+
+        return success;
+    }
+
+    public boolean saveDescriptions() {
+        boolean success = true;
+        File tentativePath = new File(descriptionsSaveFileName);
+        try {
+            FileOutputStream fileOut = new FileOutputStream(tentativePath);
+            ObjectMapper objMapper = new ObjectMapper();
+            objMapper.writeValue(fileOut, systemDescriptions);
+            fileOut.flush();
+            success = tentativePath.renameTo(new File(descriptionsSaveFileName));
+            fileOut.close();
+        } catch (FileNotFoundException ex) {
+            success = false;
+        } catch (IOException ex) {
+            success = false;
+        } finally {
+        }
+        return success;
+    }
+
+    public boolean loadSystems() {
+        boolean success = true;
+        String tentativePath = stateSaveFileName + ".TEMP";
+        try {
+            FileInputStream fileIn = new FileInputStream(tentativePath);
+            ObjectMapper objMapper = new ObjectMapper();
+            String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
+            systems = objMapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
+            });
+            fileIn.close();
+        } catch (FileNotFoundException e) {
+            success = false;
+        } catch (IOException ex) {
+            success = false;
+        } finally {
+        }
+        return success;
+    }
+
+    public boolean loadDescriptions() {
+        boolean success = true;
+        String tentativePath = descriptionsSaveFileName + ".TEMP";
+        try {
+            FileInputStream fileIn = new FileInputStream(tentativePath);
+            ObjectMapper objMapper = new ObjectMapper();
+            String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
+            systemDescriptions = objMapper.readValue(contents, new TypeReference<TreeMap<Long, String>>() {
+            });
+            fileIn.close();
+        } catch (FileNotFoundException e) {
+            success = false;
+        } catch (IOException ex) {
+            success = false;
+        } finally {
+        }
+        return success;
     }
 
     // Logic to push configuration to embedded system.
@@ -226,15 +312,14 @@ public class Backend implements MqttCallback {
                 log("No uid in topic string for embedded event message.");
                 return;
             }
-            log("Got an event");
             handleEmbeddedEvent(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systems.
             handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
-            log("Got state control request");
+            //  log("Got state control request");
             handleControllerRequest(message);
         } else if (initialTopic.equals(TopicStrings.descriptionsUpdateRequest())) {
-            log("Got description update request");
+            //  log("Got description update request");
             handleDescriptionUpdate(message);
         } else {
             log("Unknown MQTT topic received: " + topic);
@@ -249,8 +334,8 @@ public class Backend implements MqttCallback {
             for (long k : info.keySet()) {
                 String desc = info.get(k);
                 systemDescriptions.put(k, desc);
-                log("Description for UID " + k + ": " + desc);
-                
+                //  log("Description for UID " + k + ": " + desc);
+
             }
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -277,7 +362,7 @@ public class Backend implements MqttCallback {
         if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
             events.add(uid, System.currentTimeMillis(), info);
             ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
-            log("Event \"" + info + "\" added to log.");
+            //  log("Event \"" + info + "\" added to log. Device: " + uid);
         } else {
             log("Received event for unknown device  " + uid);
         }
@@ -300,7 +385,7 @@ public class Backend implements MqttCallback {
         if (systems.containsKey(uid)) {
             if (!liveSystems.contains(uid)) {
                 liveSystems.add(uid);
-                log("Re-adding to live systems!");
+                log("Re-adding " + uid + " to live systems!");
             }
             systems.replace(uid, info);
         } else {

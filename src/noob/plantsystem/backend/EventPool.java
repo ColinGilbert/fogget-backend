@@ -13,7 +13,6 @@ import java.util.Iterator;
 import java.util.Collections;
 import javafx.util.Pair;
 
-import noob.plantsystem.common.ArduinoEventDescriptions;
 import noob.plantsystem.common.EventRecord;
 
 /**
@@ -47,18 +46,20 @@ public class EventPool {
 
     public Pair<Boolean, ArrayDeque<EventRecord>> getEvents(long uid) {
         if (events.containsKey(uid)) {
-          return new Pair<>(true, events.get(uid));
-        }
-        else {
+            return new Pair<>(true, events.get(uid));
+        } else {
             return new Pair<>(false, new ArrayDeque<>());
         }
     }
-    
+
     public TreeMap<Long, ArrayDeque<EventRecord>> getRaw() {
         return events;
     }
-    
+
+    public void setFromRaw(TreeMap<Long, ArrayDeque<EventRecord>> val) {
+        events = val;
+    }
+
     protected TreeMap<Long, ArrayDeque<EventRecord>> events;
-    protected ArduinoEventDescriptions descriptions;
     int capacity;
 }
