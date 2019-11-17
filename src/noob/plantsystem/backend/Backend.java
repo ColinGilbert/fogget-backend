@@ -128,7 +128,7 @@ public class Backend implements MqttCallback {
         long now = System.currentTimeMillis();
         for (Long key : systems.keySet()) {
             ArduinoProxy p = systems.get(key);
-            if ((now - p.getTimestamp()) > embeddedTimeout) {
+            if ((now - p.getTransientState().getTimestamp()) > embeddedTimeout) {
                 liveSystems.remove(key);
             }
         }
@@ -233,7 +233,7 @@ public class Backend implements MqttCallback {
             }
             String topic = TopicStrings.configPushToEmbedded();
             topic += "/";
-            topic += Long.toString(arg.getUid());
+            topic += Long.toString(arg.getPersistentState().getUid());
             try {
                 client.publish(topic, messageStr.getBytes(), 2, true);
             } catch (MqttException ex) {
@@ -398,8 +398,9 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        final long uid = info.getUid();
-        info.setTimestamp(System.currentTimeMillis());
+        final long uid = info.getPersistentState().getUid();
+        
+        info.getTransientState().setTimestamp(System.currentTimeMillis());
         if (systems.containsKey(uid)) {
             if (!liveSystems.contains(uid)) {
                 liveSystems.add(uid);
@@ -408,12 +409,11 @@ public class Backend implements MqttCallback {
             systems.replace(uid, info);
         } else {
             ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
-            proxy.setUid(uid);
+            proxy.getPersistentState().setUid(uid);
             systems.put(uid, proxy);
             subscribeToEmbeddedSystem(uid);
             ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
-            representation.setUid(uid);
-            representation.updateConfigValues(info);
+            representation.setPersistentState(info.getPersistentState());
             representation.changeAll();
             pushConfig(representation);
         }

@@ -25,12 +25,12 @@ public class ArduinoFilesystemSaver {
 
     public boolean save(ArduinoProxy arg) {
         boolean success = true;
-        PersistentArduinoState state = arg.extractPersistentState();
+        PersistentArduinoState state = arg.getPersistentState();
         File tentativePath = new File(String.valueOf(state.getUid()) + ".TEMP");
         try {
             FileOutputStream fileOut = new FileOutputStream(tentativePath);
             ObjectOutputStream oos = new ObjectOutputStream(fileOut);
-            oos.writeObject(arg.extractPersistentState());
+            oos.writeObject(arg.getPersistentState());
             oos.flush();
             fileOut.flush();
             success = tentativePath.renameTo(new File(String.valueOf(state.getUid())));
@@ -49,7 +49,7 @@ public class ArduinoFilesystemSaver {
         try {
             FileInputStream fileIn = new FileInputStream(tentativePath);
             ObjectInputStream ois = new ObjectInputStream(fileIn);
-            results.updatePersistentState((PersistentArduinoState)ois.readObject());
+            results.setPersistentState((PersistentArduinoState)ois.readObject());
         } catch (FileNotFoundException e) { success = false; }
         catch (IOException | ClassNotFoundException e) { success = false; }
         finally { }
