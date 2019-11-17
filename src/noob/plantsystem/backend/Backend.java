@@ -69,6 +69,10 @@ public class Backend implements MqttCallback {
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
     protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
+    final Object proxiesLock = new Object();
+    final Object descriptionsLock = new Object();
+    final Object eventsLock = new Object();
+    
     final String stateSaveFileName = "SYSTEMS.SAVE";
     final String descriptionsSaveFileName = "DESCRIPTIONS.SAVE";
     protected long currentTime;
@@ -101,8 +105,8 @@ public class Backend implements MqttCallback {
             Thread.currentThread().interrupt();
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
-        subscribe(TopicStrings.stateControlRequest(), 2);
-        subscribe(TopicStrings.descriptionsUpdateRequest(), 2);
+        subscribe(TopicStrings.stateControlRequest(), 1);
+        subscribe(TopicStrings.descriptionsUpdateRequest(), 1);
         subscribe(TopicStrings.embeddedStatePush(), 0);
     }
 
@@ -132,6 +136,7 @@ public class Backend implements MqttCallback {
     }
 
     public boolean saveSystems() {
+        synchronized (proxiesLock) {
         boolean success = true;
         File tentativePath = new File(stateSaveFileName + ".TEMP");
         try {
@@ -149,9 +154,11 @@ public class Backend implements MqttCallback {
         }
 
         return success;
+        }
     }
 
     public boolean saveDescriptions() {
+        synchronized (descriptionsLock) {
         boolean success = true;
         File tentativePath = new File(descriptionsSaveFileName);
         try {
@@ -168,9 +175,11 @@ public class Backend implements MqttCallback {
         } finally {
         }
         return success;
+        }
     }
 
     public boolean loadSystems() {
+        synchronized (proxiesLock) {
         boolean success = true;
         String tentativePath = stateSaveFileName + ".TEMP";
         try {
@@ -187,9 +196,11 @@ public class Backend implements MqttCallback {
         } finally {
         }
         return success;
+        }
     }
 
     public boolean loadDescriptions() {
+        synchronized (descriptionsLock) {
         boolean success = true;
         String tentativePath = descriptionsSaveFileName + ".TEMP";
         try {
@@ -206,6 +217,7 @@ public class Backend implements MqttCallback {
         } finally {
         }
         return success;
+    }
     }
 
     // Logic to push configuration to embedded system.
@@ -233,6 +245,8 @@ public class Backend implements MqttCallback {
     }
 
     public void pushDescriptionsToUI() {
+        synchronized (descriptionsLock) {
+            
         ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket(uiCommIP, uiCommPort);
@@ -243,9 +257,11 @@ public class Backend implements MqttCallback {
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
+        }
     }
 
     public void pushEventsToUI() {
+        synchronized (eventsLock) {
         ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket(uiCommIP, uiCommPort);
@@ -262,9 +278,11 @@ public class Backend implements MqttCallback {
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
+        }
     }
 
     public void pushStateDataToUI() {
+        synchronized (proxiesLock) {
         ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket(uiCommIP, uiCommPort);
@@ -281,6 +299,7 @@ public class Backend implements MqttCallback {
             tcpOut.println(info);
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+        }
         }
     }
 
