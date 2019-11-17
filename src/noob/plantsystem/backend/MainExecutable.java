@@ -35,7 +35,7 @@ public class MainExecutable {
             app.pushDescriptionsToUI();
             app.markAbsentSystems();
             try {
-                Thread.sleep(10);
+                Thread.sleep(50);
             } catch (InterruptedException ex) {
                 Logger.getLogger(MainExecutable.class.getName()).log(Level.SEVERE, null, ex);
             }
