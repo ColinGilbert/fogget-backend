@@ -235,7 +235,7 @@ public class Backend implements MqttCallback {
             topic += "/";
             topic += Long.toString(arg.getPersistentState().getUid());
             try {
-                client.publish(topic, messageStr.getBytes(), 2, true);
+                client.publish(topic, messageStr.getBytes(), 1, true);
             } catch (MqttException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
@@ -245,7 +245,6 @@ public class Backend implements MqttCallback {
 
     public void pushDescriptionsToUI() {
         synchronized (descriptionsLock) {
-            
         ObjectMapper mapper = new ObjectMapper();
         try {
             Socket socket = new Socket(uiCommIP, uiCommPort);
@@ -351,7 +350,9 @@ public class Backend implements MqttCallback {
             });
             for (long k : info.keySet()) {
                 String desc = info.get(k);
+                synchronized (descriptionsLock) {
                 systemDescriptions.put(k, desc);
+                }
                 //  log("Description for UID " + k + ": " + desc);
 
             }
@@ -377,6 +378,7 @@ public class Backend implements MqttCallback {
             return;
         }
         long uid = Long.parseLong(splitTopic[1]);
+        synchronized(proxiesLock) {
         if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
             events.add(uid, System.currentTimeMillis(), info);
             ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
@@ -384,6 +386,7 @@ public class Backend implements MqttCallback {
         } else {
             log("Received event for unknown device  " + uid);
         }
+    }
     }
 
     protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
