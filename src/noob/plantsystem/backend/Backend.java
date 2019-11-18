@@ -142,13 +142,14 @@ public class Backend implements MqttCallback {
                 success = tentativePath.renameTo(new File(stateSaveFileName));
                 fileOut.close();
             } catch (FileNotFoundException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
 
                 success = false;
             } catch (IOException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
-            } finally {
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
 
             return success;
@@ -167,12 +168,13 @@ public class Backend implements MqttCallback {
                 success = tentativePath.renameTo(new File(descriptionsSaveFileName));
                 fileOut.close();
             } catch (FileNotFoundException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } catch (IOException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
-            } finally {
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
             return success;
         }
@@ -190,12 +192,14 @@ public class Backend implements MqttCallback {
                 });
                 fileIn.close();
             } catch (FileNotFoundException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } catch (IOException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
-            } finally {
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+
             }
             return success;
         }
@@ -213,13 +217,16 @@ public class Backend implements MqttCallback {
                 });
                 fileIn.close();
             } catch (FileNotFoundException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } catch (IOException ex) {
-                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
-            } finally {
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                success = false;
             }
+
             return success;
         }
     }
@@ -243,6 +250,8 @@ public class Backend implements MqttCallback {
                 client.publish(topic, messageStr.getBytes(), 1, true);
             } catch (MqttException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
             // log("Config pushed. Topic string: " + topic + ", JSON: " + messageStr);
         }
@@ -251,24 +260,31 @@ public class Backend implements MqttCallback {
     public void pushDescriptionsToUI() {
         synchronized (descriptionsLock) {
             ObjectMapper mapper = new ObjectMapper();
+            Socket socket = null;
+            PrintWriter tcpOut = null;
             try {
-                Socket socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
-                PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+                socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
+                tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushDescriptionsToUI);
                 String info = mapper.writeValueAsString(systemDescriptions);
                 tcpOut.println(info);
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
+            closeConnection(tcpOut, socket);
         }
     }
 
     public void pushEventsToUI() {
         synchronized (eventsLock) {
             ObjectMapper mapper = new ObjectMapper();
+            Socket socket = null;
+            PrintWriter tcpOut = null;
             try {
-                Socket socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
-                PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+                socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
+                tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushEventsToUI);
                 TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
                 for (long key : events.getRaw().keySet()) {
@@ -280,17 +296,22 @@ public class Backend implements MqttCallback {
                 tcpOut.println(info);
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
+            closeConnection(tcpOut, socket);
         }
     }
 
     public void pushStateDataToUI() {
         synchronized (proxiesLock) {
             ObjectMapper mapper = new ObjectMapper();
+            Socket socket = null;
+            PrintWriter tcpOut = null;
             try {
-                Socket socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
+                socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 // Scanner tcpIn = new Scanner(socket.getInputStream());
-                PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+                tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushProxiesToUI);
                 TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
                 for (long key : systems.keySet()) {
@@ -302,7 +323,25 @@ public class Backend implements MqttCallback {
                 tcpOut.println(info);
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
+            closeConnection(tcpOut, socket);
+        }
+    }
+
+    protected void closeConnection(PrintWriter tcpOut, Socket socket) {
+        try {
+            tcpOut.close();
+        } catch (Exception ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        try {
+            socket.close();
+        } catch (IOException ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (Exception ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
     }
 
