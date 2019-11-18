@@ -71,7 +71,6 @@ public class Backend implements MqttCallback {
     final String stateSaveFileName = "SYSTEMS.SAVE";
     final String descriptionsSaveFileName = "DESCRIPTIONS.SAVE";
     protected long currentTime;
-    protected final int embeddedTimeout = 10000;
     //MQTT related
     protected String brokerURL = CommonValues.mqttBrokerURL;
     protected MqttAsyncClient client;
@@ -125,7 +124,7 @@ public class Backend implements MqttCallback {
         long now = System.currentTimeMillis();
         for (Long key : systems.keySet()) {
             ArduinoProxy p = systems.get(key);
-            if ((now - p.getTransientState().getTimestamp()) > embeddedTimeout) {
+            if ((now - p.getTransientState().getTimestamp()) > CommonValues.embeddedSystemTimeout) {
                 liveSystems.remove(key);
             }
         }
@@ -143,8 +142,11 @@ public class Backend implements MqttCallback {
                 success = tentativePath.renameTo(new File(stateSaveFileName));
                 fileOut.close();
             } catch (FileNotFoundException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+
                 success = false;
             } catch (IOException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } finally {
             }
@@ -165,8 +167,10 @@ public class Backend implements MqttCallback {
                 success = tentativePath.renameTo(new File(descriptionsSaveFileName));
                 fileOut.close();
             } catch (FileNotFoundException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } catch (IOException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } finally {
             }
@@ -185,9 +189,11 @@ public class Backend implements MqttCallback {
                 systems = objMapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
                 });
                 fileIn.close();
-            } catch (FileNotFoundException e) {
+            } catch (FileNotFoundException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } catch (IOException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } finally {
             }
@@ -206,9 +212,11 @@ public class Backend implements MqttCallback {
                 systemDescriptions = objMapper.readValue(contents, new TypeReference<TreeMap<Long, String>>() {
                 });
                 fileIn.close();
-            } catch (FileNotFoundException e) {
+            } catch (FileNotFoundException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } catch (IOException ex) {
+                                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             } finally {
             }
