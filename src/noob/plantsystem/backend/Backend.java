@@ -77,7 +77,8 @@ public class Backend implements MqttCallback {
     protected boolean logging;
     protected MqttConnectOptions connectionOptions;
     protected Object waiter = new Object();
-
+    protected ObjectMapper mapper = new ObjectMapper();
+    
     public void init() throws MqttException {
         connectionOptions = new MqttConnectOptions();
         connectionOptions.setCleanSession(true);
@@ -259,7 +260,6 @@ public class Backend implements MqttCallback {
 
     public void pushDescriptionsToUI() {
         synchronized (descriptionsLock) {
-            ObjectMapper mapper = new ObjectMapper();
             Socket socket = null;
             PrintWriter tcpOut = null;
             try {
@@ -279,7 +279,6 @@ public class Backend implements MqttCallback {
 
     public void pushEventsToUI() {
         synchronized (eventsLock) {
-            ObjectMapper mapper = new ObjectMapper();
             Socket socket = null;
             PrintWriter tcpOut = null;
             try {
@@ -305,7 +304,6 @@ public class Backend implements MqttCallback {
 
     public void pushStateDataToUI() {
         synchronized (proxiesLock) {
-            ObjectMapper mapper = new ObjectMapper();
             Socket socket = null;
             PrintWriter tcpOut = null;
             try {
