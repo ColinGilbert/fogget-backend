@@ -434,7 +434,7 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
-        // Send the control message to the relevant embedded devices
+        // Send the control message to the relevant embedded devices, but validate first.
         for (ArduinoConfigChangeRepresentation req : requestItems) {
             boolean settingLightsOnHour = false;
             boolean settingLightsOffHour = false;
@@ -445,6 +445,7 @@ public class Backend implements MqttCallback {
             final int lightsOffHour = req.getPersistentState().getLightsOffHour();
             final int lightsOffMinute = req.getPersistentState().getLightsOffMinute();
             final long uid = req.getPersistentState().getUid();
+            // Validating time
             if (req.hasChanges()) {
                 if (req.isChangingLightsOnHour()) {
                     settingLightsOnHour = true;
@@ -482,6 +483,37 @@ public class Backend implements MqttCallback {
                     req.setChangingLightsOffHour(false);
                     req.setChangingLightsOffMinute(false);
                 }
+                // Validating misting interval
+                if (req.isChangingMistingInterval() && req.getPersistentState().getMistingInterval() < 0) {
+                    req.setChangingMistingInterval(false);
+                }
+                // Validating misting duration
+                if (req.isChangingMistingDuration() && req.getPersistentState().getMistingDuration() < 0) {
+                    req.setChangingMistingDuration(false);
+                }
+                // Validating solution ratio of nutrients vs water
+                final double solutionRatio = req.getPersistentState().getNutrientSolutionRatio();
+                if (req.isChangingNutrientSolutionRatio() && (solutionRatio > CommonValues.maxNutrientSolutionRatio || solutionRatio < CommonValues.minNutrientSolutionRatio)) {
+                    req.setChangingNutrientSolutionRatio(false);
+                }
+                // Validating humidity
+                final float humidity = req.getPersistentState().getTargetUpperChamberHumidity();
+                if (req.isChangingTargetUpperChamberHumidity() && (humidity > CommonValues.maxHumidity || humidity < CommonValues.minHumidity)) {
+                    req.setChangingTargetUpperChamberHumidity(false);
+                }
+                // Validating temperature
+                final float temperature = req.getPersistentState().getTargetUpperChamberTemperature();
+                if (req.isChangingTargetUpperChamberTemperature() && (temperature > CommonValues.maxTargetTemperature || temperature < CommonValues.minTargetTemperature)) {
+                    req.setChangingTargetUpperChamberTemperature(false);
+                }
+                // Validating target CO2 levels
+                if (req.isChangingTargetCO2PPM()) {
+                    final int ppm = req.getPersistentState().getTargetCO2PPM();
+                    if (ppm < CommonValues.minCO2PPM || ppm > CommonValues.maxCO2PPM) {
+                        req.setChangingTargetCO2PPM(false);
+                    }
+                }
+
                 pushConfig(req);
                 log("Sending a control packet");
             }
