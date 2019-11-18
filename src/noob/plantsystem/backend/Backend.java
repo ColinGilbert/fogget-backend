@@ -154,7 +154,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-
+            proxiesLock.notifyAll();
             return success;
         }
     }
@@ -179,6 +179,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
+            descriptionsLock.notifyAll();
             return success;
         }
     }
