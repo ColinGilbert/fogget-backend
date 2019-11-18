@@ -262,11 +262,12 @@ public class Backend implements MqttCallback {
         synchronized (descriptionsLock) {
             Socket socket = null;
             PrintWriter tcpOut = null;
+            String info = null;
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushDescriptionsToUI);
-                String info = mapper.writeValueAsString(systemDescriptions);
+                info = mapper.writeValueAsString(systemDescriptions);
                 tcpOut.println(info);
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -281,17 +282,18 @@ public class Backend implements MqttCallback {
         synchronized (eventsLock) {
             Socket socket = null;
             PrintWriter tcpOut = null;
+            String info = null;
+            TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushEventsToUI);
-                TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
                 for (long key : events.getRaw().keySet()) {
                     if (liveSystems.contains(key)) {
                         results.put(key, events.getRaw().get(key));
                     }
                 }
-                String info = mapper.writeValueAsString(results);
+                info = mapper.writeValueAsString(results);
                 tcpOut.println(info);
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -306,18 +308,19 @@ public class Backend implements MqttCallback {
         synchronized (proxiesLock) {
             Socket socket = null;
             PrintWriter tcpOut = null;
+            String info = null;
+            TreeMap<Long, ArduinoProxy>  results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 // Scanner tcpIn = new Scanner(socket.getInputStream());
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushProxiesToUI);
-                TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
                 for (long key : systems.keySet()) {
                     if (liveSystems.contains(key)) {
                         results.put(key, systems.get(key));
                     }
                 }
-                String info = mapper.writeValueAsString(results);
+                info = mapper.writeValueAsString(results);
                 tcpOut.println(info);
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
