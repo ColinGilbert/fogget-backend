@@ -78,7 +78,7 @@ public class Backend implements MqttCallback {
     protected MqttConnectOptions connectionOptions;
     protected Object waiter = new Object();
     protected ObjectMapper mapper = new ObjectMapper();
-    
+
     public void init() throws MqttException {
         connectionOptions = new MqttConnectOptions();
         connectionOptions.setCleanSession(true);
@@ -86,6 +86,8 @@ public class Backend implements MqttCallback {
         client = new MqttAsyncClient(brokerURL, MqttAsyncClient.generateClientId(), new MemoryPersistence());
         currentTime = System.currentTimeMillis();
         client.setCallback(this);
+        loadSystems();
+        loadDescriptions();
     }
 
     void setLogging(boolean arg) {
@@ -134,7 +136,7 @@ public class Backend implements MqttCallback {
     public boolean saveSystems() {
         synchronized (proxiesLock) {
             boolean success = true;
-            File tentativePath = new File(stateSaveFileName + ".TEMP");
+            File tentativePath = new File(stateSaveFileName);
             try {
                 FileOutputStream fileOut = new FileOutputStream(tentativePath);
                 ObjectMapper objMapper = new ObjectMapper();
@@ -184,7 +186,7 @@ public class Backend implements MqttCallback {
     public boolean loadSystems() {
         synchronized (proxiesLock) {
             boolean success = true;
-            String tentativePath = stateSaveFileName + ".TEMP";
+            String tentativePath = stateSaveFileName;
             try {
                 FileInputStream fileIn = new FileInputStream(tentativePath);
                 ObjectMapper objMapper = new ObjectMapper();
@@ -202,6 +204,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
 
             }
+            proxiesLock.notifyAll();
             return success;
         }
     }
@@ -209,7 +212,7 @@ public class Backend implements MqttCallback {
     public boolean loadDescriptions() {
         synchronized (descriptionsLock) {
             boolean success = true;
-            String tentativePath = descriptionsSaveFileName + ".TEMP";
+            String tentativePath = descriptionsSaveFileName ;
             try {
                 FileInputStream fileIn = new FileInputStream(tentativePath);
                 ObjectMapper objMapper = new ObjectMapper();
@@ -227,7 +230,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 success = false;
             }
-
+            descriptionsLock.notifyAll();
             return success;
         }
     }
@@ -275,6 +278,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
             closeConnection(tcpOut, socket);
+            descriptionsLock.notifyAll();
         }
     }
 
@@ -289,6 +293,7 @@ public class Backend implements MqttCallback {
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushEventsToUI);
                 for (long key : events.getRaw().keySet()) {
+                    // Add sync loop?
                     if (liveSystems.contains(key)) {
                         results.put(key, events.getRaw().get(key));
                     }
@@ -301,6 +306,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
             closeConnection(tcpOut, socket);
+            eventsLock.notifyAll();
         }
     }
 
@@ -309,7 +315,7 @@ public class Backend implements MqttCallback {
             Socket socket = null;
             PrintWriter tcpOut = null;
             String info = null;
-            TreeMap<Long, ArduinoProxy>  results = new TreeMap<>();
+            TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 // Scanner tcpIn = new Scanner(socket.getInputStream());
@@ -328,6 +334,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
             closeConnection(tcpOut, socket);
+            proxiesLock.notifyAll();
         }
     }
 
@@ -390,15 +397,19 @@ public class Backend implements MqttCallback {
 
     protected void handleDescriptionUpdate(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
+        boolean success = true;
         try {
             TreeMap<Long, String> info = objectMapper.readValue(message.toString(), new TypeReference<TreeMap<Long, String>>() {
             });
-            for (long k : info.keySet()) {
-                String desc = info.get(k);
-                synchronized (descriptionsLock) {
+            String desc = null;
+            synchronized (descriptionsLock) {
+                for (long k : info.keySet()) {
+                    desc = info.get(k);
                     systemDescriptions.put(k, desc);
                 }
                 //  log("Description for UID " + k + ": " + desc);
+             success = true;
+                descriptionsLock.notifyAll();
             }
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -407,6 +418,7 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
+        saveDescriptions();
     }
 
     protected void handleEmbeddedEvent(String[] splitTopic, MqttMessage message) {
@@ -421,15 +433,23 @@ public class Backend implements MqttCallback {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
         }
+
         long uid = Long.parseLong(splitTopic[1]);
+
+        boolean hasKey = false;
         synchronized (proxiesLock) {
-            if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
+            hasKey = systems.containsKey(uid);
+            proxiesLock.notifyAll();
+        }
+        synchronized (eventsLock) {
+            if (hasKey) { // If we know the uid already, we can send to the device any its config info.
                 events.add(uid, System.currentTimeMillis(), info);
                 ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
                 //  log("Event \"" + info + "\" added to log. Device: " + uid);
             } else {
                 log("Received event for unknown device  " + uid);
             }
+            eventsLock.notifyAll();
         }
     }
 
@@ -447,21 +467,25 @@ public class Backend implements MqttCallback {
         }
         final long uid = info.getPersistentState().getUid();
         info.getTransientState().setTimestamp(System.currentTimeMillis());
-        if (systems.containsKey(uid)) {
-            if (!liveSystems.contains(uid)) {
-                liveSystems.add(uid);
-                log("Re-adding " + uid + " to live systems!");
+        synchronized (proxiesLock) {
+            if (systems.containsKey(uid)) {
+                if (!liveSystems.contains(uid)) {
+                    liveSystems.add(uid);
+                    log("Re-adding " + uid + " to live systems!");
+                }
+                systems.replace(uid, info);
+            } else {
+                ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
+                proxy.getPersistentState().setUid(uid);
+                systems.put(uid, proxy);
+                subscribeToEmbeddedSystem(uid);
+                ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
+                representation.setPersistentState(info.getPersistentState());
+                representation.changeAll();
+                pushConfig(representation);
+                saveSystems();
             }
-            systems.replace(uid, info);
-        } else {
-            ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
-            proxy.getPersistentState().setUid(uid);
-            systems.put(uid, proxy);
-            subscribeToEmbeddedSystem(uid);
-            ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
-            representation.setPersistentState(info.getPersistentState());
-            representation.changeAll();
-            pushConfig(representation);
+            proxiesLock.notifyAll();
         }
     }
 
