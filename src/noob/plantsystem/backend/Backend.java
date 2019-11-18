@@ -359,7 +359,6 @@ public class Backend implements MqttCallback {
                     systemDescriptions.put(k, desc);
                 }
                 //  log("Description for UID " + k + ": " + desc);
-
             }
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -407,7 +406,6 @@ public class Backend implements MqttCallback {
             return;
         }
         final long uid = info.getPersistentState().getUid();
-
         info.getTransientState().setTimestamp(System.currentTimeMillis());
         if (systems.containsKey(uid)) {
             if (!liveSystems.contains(uid)) {
