@@ -60,10 +60,7 @@ import java.util.logging.Logger;
  */
 public class Backend implements MqttCallback {
 
-    final protected long embeddedTimeout = 5000;
-    final protected String uiCommIP = "127.0.0.1";
-    final protected int uiCommPort = 6777;
-    protected EventPool events = new EventPool(1000);
+    protected EventPool events = new EventPool(CommonValues.eventPoolQueueSize);
     protected TreeMap<Long, ArduinoProxy> systems = new TreeMap<>();
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
@@ -71,12 +68,12 @@ public class Backend implements MqttCallback {
     final Object proxiesLock = new Object();
     final Object descriptionsLock = new Object();
     final Object eventsLock = new Object();
-    
     final String stateSaveFileName = "SYSTEMS.SAVE";
     final String descriptionsSaveFileName = "DESCRIPTIONS.SAVE";
     protected long currentTime;
+    protected final int embeddedTimeout = 10000;
     //MQTT related
-    protected String brokerURL = "tcp://127.0.0.1:1883";
+    protected String brokerURL = CommonValues.mqttBrokerURL;
     protected MqttAsyncClient client;
     protected boolean logging;
     protected MqttConnectOptions connectionOptions;
@@ -136,87 +133,87 @@ public class Backend implements MqttCallback {
 
     public boolean saveSystems() {
         synchronized (proxiesLock) {
-        boolean success = true;
-        File tentativePath = new File(stateSaveFileName + ".TEMP");
-        try {
-            FileOutputStream fileOut = new FileOutputStream(tentativePath);
-            ObjectMapper objMapper = new ObjectMapper();
-            objMapper.writeValue(fileOut, systems);
-            fileOut.flush();
-            success = tentativePath.renameTo(new File(stateSaveFileName));
-            fileOut.close();
-        } catch (FileNotFoundException ex) {
-            success = false;
-        } catch (IOException ex) {
-            success = false;
-        } finally {
-        }
+            boolean success = true;
+            File tentativePath = new File(stateSaveFileName + ".TEMP");
+            try {
+                FileOutputStream fileOut = new FileOutputStream(tentativePath);
+                ObjectMapper objMapper = new ObjectMapper();
+                objMapper.writeValue(fileOut, systems);
+                fileOut.flush();
+                success = tentativePath.renameTo(new File(stateSaveFileName));
+                fileOut.close();
+            } catch (FileNotFoundException ex) {
+                success = false;
+            } catch (IOException ex) {
+                success = false;
+            } finally {
+            }
 
-        return success;
+            return success;
         }
     }
 
     public boolean saveDescriptions() {
         synchronized (descriptionsLock) {
-        boolean success = true;
-        File tentativePath = new File(descriptionsSaveFileName);
-        try {
-            FileOutputStream fileOut = new FileOutputStream(tentativePath);
-            ObjectMapper objMapper = new ObjectMapper();
-            objMapper.writeValue(fileOut, systemDescriptions);
-            fileOut.flush();
-            success = tentativePath.renameTo(new File(descriptionsSaveFileName));
-            fileOut.close();
-        } catch (FileNotFoundException ex) {
-            success = false;
-        } catch (IOException ex) {
-            success = false;
-        } finally {
-        }
-        return success;
+            boolean success = true;
+            File tentativePath = new File(descriptionsSaveFileName);
+            try {
+                FileOutputStream fileOut = new FileOutputStream(tentativePath);
+                ObjectMapper objMapper = new ObjectMapper();
+                objMapper.writeValue(fileOut, systemDescriptions);
+                fileOut.flush();
+                success = tentativePath.renameTo(new File(descriptionsSaveFileName));
+                fileOut.close();
+            } catch (FileNotFoundException ex) {
+                success = false;
+            } catch (IOException ex) {
+                success = false;
+            } finally {
+            }
+            return success;
         }
     }
 
     public boolean loadSystems() {
         synchronized (proxiesLock) {
-        boolean success = true;
-        String tentativePath = stateSaveFileName + ".TEMP";
-        try {
-            FileInputStream fileIn = new FileInputStream(tentativePath);
-            ObjectMapper objMapper = new ObjectMapper();
-            String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
-            systems = objMapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
-            });
-            fileIn.close();
-        } catch (FileNotFoundException e) {
-            success = false;
-        } catch (IOException ex) {
-            success = false;
-        } finally {
-        }
-        return success;
+            boolean success = true;
+            String tentativePath = stateSaveFileName + ".TEMP";
+            try {
+                FileInputStream fileIn = new FileInputStream(tentativePath);
+                ObjectMapper objMapper = new ObjectMapper();
+                String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
+                systems = objMapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
+                });
+                fileIn.close();
+            } catch (FileNotFoundException e) {
+                success = false;
+            } catch (IOException ex) {
+                success = false;
+            } finally {
+            }
+            return success;
         }
     }
 
     public boolean loadDescriptions() {
         synchronized (descriptionsLock) {
-        boolean success = true;
-        String tentativePath = descriptionsSaveFileName + ".TEMP";
-        try {
-            FileInputStream fileIn = new FileInputStream(tentativePath);
-            ObjectMapper objMapper = new ObjectMapper();
-            String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
-            systemDescriptions = objMapper.readValue(contents, new TypeReference<TreeMap<Long, String>>() {
-            });
-            fileIn.close();
-        } catch (FileNotFoundException e) {
-            success = false;
-        } catch (IOException ex) {
-            success = false;
-        } finally {
+            boolean success = true;
+            String tentativePath = descriptionsSaveFileName + ".TEMP";
+            try {
+                FileInputStream fileIn = new FileInputStream(tentativePath);
+                ObjectMapper objMapper = new ObjectMapper();
+                String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
+                systemDescriptions = objMapper.readValue(contents, new TypeReference<TreeMap<Long, String>>() {
+                });
+                fileIn.close();
+            } catch (FileNotFoundException e) {
+                success = false;
+            } catch (IOException ex) {
+                success = false;
+            } finally {
+            }
+            return success;
         }
-        return success;
-    }
     }
 
     // Logic to push configuration to embedded system.
@@ -245,59 +242,59 @@ public class Backend implements MqttCallback {
 
     public void pushDescriptionsToUI() {
         synchronized (descriptionsLock) {
-        ObjectMapper mapper = new ObjectMapper();
-        try {
-            Socket socket = new Socket(uiCommIP, uiCommPort);
-            PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
-            tcpOut.println("PUTDESCRIPTIONS");
-            String info = mapper.writeValueAsString(systemDescriptions);
-            tcpOut.println(info);
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        }
+            ObjectMapper mapper = new ObjectMapper();
+            try {
+                Socket socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
+                PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+                tcpOut.println(CommonValues.pushDescriptionsToUI);
+                String info = mapper.writeValueAsString(systemDescriptions);
+                tcpOut.println(info);
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            }
         }
     }
 
     public void pushEventsToUI() {
         synchronized (eventsLock) {
-        ObjectMapper mapper = new ObjectMapper();
-        try {
-            Socket socket = new Socket(uiCommIP, uiCommPort);
-            PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
-            tcpOut.println("PUTEVENTS");
-            TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
-            for (long key : events.getRaw().keySet()) {
-                if (liveSystems.contains(key)) {
-                    results.put(key, events.getRaw().get(key));
+            ObjectMapper mapper = new ObjectMapper();
+            try {
+                Socket socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
+                PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+                tcpOut.println(CommonValues.pushEventsToUI);
+                TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
+                for (long key : events.getRaw().keySet()) {
+                    if (liveSystems.contains(key)) {
+                        results.put(key, events.getRaw().get(key));
+                    }
                 }
+                String info = mapper.writeValueAsString(results);
+                tcpOut.println(info);
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            String info = mapper.writeValueAsString(results);
-            tcpOut.println(info);
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        }
         }
     }
 
     public void pushStateDataToUI() {
         synchronized (proxiesLock) {
-        ObjectMapper mapper = new ObjectMapper();
-        try {
-            Socket socket = new Socket(uiCommIP, uiCommPort);
-            // Scanner tcpIn = new Scanner(socket.getInputStream());
-            PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
-            tcpOut.println("PUTPROXIES");
-            TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
-            for (long key : systems.keySet()) {
-                if (liveSystems.contains(key)) {
-                    results.put(key, systems.get(key));
+            ObjectMapper mapper = new ObjectMapper();
+            try {
+                Socket socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
+                // Scanner tcpIn = new Scanner(socket.getInputStream());
+                PrintWriter tcpOut = new PrintWriter(socket.getOutputStream(), true);
+                tcpOut.println(CommonValues.pushProxiesToUI);
+                TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
+                for (long key : systems.keySet()) {
+                    if (liveSystems.contains(key)) {
+                        results.put(key, systems.get(key));
+                    }
                 }
+                String info = mapper.writeValueAsString(results);
+                tcpOut.println(info);
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            String info = mapper.writeValueAsString(results);
-            tcpOut.println(info);
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        }
         }
     }
 
@@ -351,7 +348,7 @@ public class Backend implements MqttCallback {
             for (long k : info.keySet()) {
                 String desc = info.get(k);
                 synchronized (descriptionsLock) {
-                systemDescriptions.put(k, desc);
+                    systemDescriptions.put(k, desc);
                 }
                 //  log("Description for UID " + k + ": " + desc);
 
@@ -378,15 +375,15 @@ public class Backend implements MqttCallback {
             return;
         }
         long uid = Long.parseLong(splitTopic[1]);
-        synchronized(proxiesLock) {
-        if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
-            events.add(uid, System.currentTimeMillis(), info);
-            ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
-            //  log("Event \"" + info + "\" added to log. Device: " + uid);
-        } else {
-            log("Received event for unknown device  " + uid);
+        synchronized (proxiesLock) {
+            if (systems.containsKey(uid)) { // If we know the uid already, we can send to the device any its config info.
+                events.add(uid, System.currentTimeMillis(), info);
+                ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
+                //  log("Event \"" + info + "\" added to log. Device: " + uid);
+            } else {
+                log("Received event for unknown device  " + uid);
+            }
         }
-    }
     }
 
     protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
@@ -402,7 +399,7 @@ public class Backend implements MqttCallback {
             return;
         }
         final long uid = info.getPersistentState().getUid();
-        
+
         info.getTransientState().setTimestamp(System.currentTimeMillis());
         if (systems.containsKey(uid)) {
             if (!liveSystems.contains(uid)) {
@@ -439,7 +436,52 @@ public class Backend implements MqttCallback {
         }
         // Send the control message to the relevant embedded devices
         for (ArduinoConfigChangeRepresentation req : requestItems) {
+            boolean settingLightsOnHour = false;
+            boolean settingLightsOffHour = false;
+            boolean settingLightsOnMinute = false;
+            boolean settingLightsOffMinute = false;
+            final int lightsOnHour = req.getPersistentState().getLightsOnHour();
+            final int lightsOnMinute = req.getPersistentState().getLightsOnMinute();
+            final int lightsOffHour = req.getPersistentState().getLightsOffHour();
+            final int lightsOffMinute = req.getPersistentState().getLightsOffMinute();
+            final long uid = req.getPersistentState().getUid();
             if (req.hasChanges()) {
+                if (req.isChangingLightsOnHour()) {
+                    settingLightsOnHour = true;
+                }
+                if (req.isChangingLightsOnMinute()) {
+                    settingLightsOnMinute = true;
+                }
+                if (req.isChangingLightsOffHour()) {
+                    settingLightsOffHour = true;
+                }
+                if (req.isChangingLightsOffMinute()) {
+                    settingLightsOffMinute = true;
+                }
+                boolean validOnTime = false;
+                if (settingLightsOnHour && settingLightsOnMinute) {
+                    validOnTime = TimeOfDayValidator.validate(lightsOnHour, lightsOnMinute);
+                } else if (settingLightsOnHour) {
+                    validOnTime = TimeOfDayValidator.validate(lightsOnHour, systems.get(uid).getPersistentState().getLightsOnMinute());
+                } else if (settingLightsOnMinute) {
+                    validOnTime = TimeOfDayValidator.validate(systems.get(uid).getPersistentState().getLightsOnHour(), lightsOnMinute);
+                }
+                if (!validOnTime) {
+                    req.setChangingLightsOnHour(false);
+                    req.setChangingLightsOnMinute(false);
+                }
+                boolean validOffTime = false;
+                if (settingLightsOffHour && settingLightsOffMinute) {
+                    validOffTime = TimeOfDayValidator.validate(lightsOffHour, lightsOffMinute);
+                } else if (settingLightsOffHour) {
+                    validOffTime = TimeOfDayValidator.validate(lightsOffHour, systems.get(uid).getPersistentState().getLightsOffMinute());
+                } else if (settingLightsOffMinute) {
+                    validOffTime = TimeOfDayValidator.validate(systems.get(uid).getPersistentState().getLightsOffHour(), lightsOffMinute);
+                }
+                if (!validOffTime) {
+                    req.setChangingLightsOffHour(false);
+                    req.setChangingLightsOffMinute(false);
+                }
                 pushConfig(req);
                 log("Sending a control packet");
             }
