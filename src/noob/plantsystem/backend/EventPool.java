@@ -5,14 +5,10 @@
  */
 package noob.plantsystem.backend;
 
-import java.util.List;
-import java.util.ArrayList;
-import java.util.TreeMap;
-import java.util.ArrayDeque;
-import java.util.Iterator;
-import java.util.Collections;
-import javafx.util.Pair;
 
+import java.util.ArrayDeque;
+import java.util.TreeMap;
+import javafx.util.Pair;
 import noob.plantsystem.common.EventRecord;
 
 /**

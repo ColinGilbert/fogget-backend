@@ -5,18 +5,36 @@
  */
 package noob.plantsystem.backend;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.sql.Timestamp;
-
-import java.util.TreeMap;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-
-import noob.plantsystem.common.*;
-
+import java.util.HashSet;
+import java.util.TreeMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import noob.plantsystem.common.ArduinoConfigChangeRepresentation;
+import noob.plantsystem.common.ArduinoEventDescriptions;
+import noob.plantsystem.common.ArduinoProxy;
+import noob.plantsystem.common.ArduinoProxySaneDefaultsFactory;
+import noob.plantsystem.common.CommonValues;
+import noob.plantsystem.common.ConnectionUtils;
+import noob.plantsystem.common.EmbeddedStateChangeValidator;
+import noob.plantsystem.common.EventRecord;
+import noob.plantsystem.common.PersistentArduinoState;
+import noob.plantsystem.common.TopicStrings;
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.IMqttToken;
@@ -27,33 +45,6 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-
-import com.fasterxml.jackson.core.TokenStreamFactory;
-import com.fasterxml.jackson.core.JsonParseException;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.PrintWriter;
-import java.net.Socket;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.ArrayDeque;
-import java.util.HashSet;
-import java.util.Scanner;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
 /**
  *
  * @author noob
@@ -61,15 +52,13 @@ import java.util.logging.Logger;
 public class Backend implements MqttCallback {
 
     protected EventPool events = new EventPool(CommonValues.eventPoolQueueSize);
-    protected TreeMap<Long, ArduinoProxy> systems = new TreeMap<>();
+    protected TreeMap<Long, ArduinoProxy> proxies = new TreeMap<>();
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
     protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
     final Object proxiesLock = new Object();
     final Object descriptionsLock = new Object();
     final Object eventsLock = new Object();
-    final String stateSaveFileName = "SYSTEMS.SAVE";
-    final String descriptionsSaveFileName = "DESCRIPTIONS.SAVE";
     protected long currentTime;
     //MQTT related
     protected String brokerURL = CommonValues.mqttBrokerURL;
@@ -125,8 +114,8 @@ public class Backend implements MqttCallback {
 
     public void markAbsentSystems() {
         long now = System.currentTimeMillis();
-        for (Long key : systems.keySet()) {
-            ArduinoProxy p = systems.get(key);
+        for (Long key : proxies.keySet()) {
+            ArduinoProxy p = proxies.get(key);
             if ((now - p.getTransientState().getTimestamp()) > CommonValues.embeddedSystemTimeout) {
                 liveSystems.remove(key);
             }
@@ -136,17 +125,16 @@ public class Backend implements MqttCallback {
     public boolean saveSystems() {
         synchronized (proxiesLock) {
             boolean success = true;
-            File tentativePath = new File(stateSaveFileName);
+            File tentativePath = new File(CommonValues.stateSaveFileName);
+            FileOutputStream fileOut = null;
             try {
-                FileOutputStream fileOut = new FileOutputStream(tentativePath);
-                ObjectMapper objMapper = new ObjectMapper();
-                objMapper.writeValue(fileOut, systems);
+                fileOut = new FileOutputStream(tentativePath);
+                mapper.writeValue(fileOut, proxies);
                 fileOut.flush();
-                success = tentativePath.renameTo(new File(stateSaveFileName));
+                success = tentativePath.renameTo(new File(CommonValues.stateSaveFileName));
                 fileOut.close();
             } catch (FileNotFoundException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-
                 success = false;
             } catch (IOException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -162,13 +150,13 @@ public class Backend implements MqttCallback {
     public boolean saveDescriptions() {
         synchronized (descriptionsLock) {
             boolean success = true;
-            File tentativePath = new File(descriptionsSaveFileName);
+            FileOutputStream fileOut = null;
+            File tentativePath = new File(CommonValues.descriptionsSaveFileName);
             try {
-                FileOutputStream fileOut = new FileOutputStream(tentativePath);
-                ObjectMapper objMapper = new ObjectMapper();
-                objMapper.writeValue(fileOut, systemDescriptions);
+                fileOut = new FileOutputStream(tentativePath);
+                mapper.writeValue(fileOut, systemDescriptions);
                 fileOut.flush();
-                success = tentativePath.renameTo(new File(descriptionsSaveFileName));
+                success = tentativePath.renameTo(new File(CommonValues.descriptionsSaveFileName));
                 fileOut.close();
             } catch (FileNotFoundException ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -186,24 +174,32 @@ public class Backend implements MqttCallback {
 
     public boolean loadSystems() {
         synchronized (proxiesLock) {
+            FileInputStream fileIn = null;
             boolean success = true;
-            String tentativePath = stateSaveFileName;
-            try {
-                FileInputStream fileIn = new FileInputStream(tentativePath);
-                ObjectMapper objMapper = new ObjectMapper();
-                String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
-                systems = objMapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
-                });
-                fileIn.close();
-            } catch (FileNotFoundException ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-                success = false;
-            } catch (IOException ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-                success = false;
-            } catch (Exception ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            // String tentativePath = CommonValues.stateSaveFileName;
+            Path tentativePath = Paths.get(CommonValues.stateSaveFileName);
+            if (Files.exists(tentativePath)) {
+                String contents = null;
+                try {
+                    fileIn = new FileInputStream(tentativePath.toString());
+                    if (fileIn.available() > 0) {
+                        contents = new String(Files.readAllBytes(tentativePath));
+                        proxies = mapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
+                        });
+                        fileIn.close();
+                    } else {
+                        success = false;
+                    }
+                } catch (FileNotFoundException ex) {
+                    Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                    success = false;
+                } catch (IOException ex) {
+                    Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                    success = false;
+                } catch (Exception ex) {
+                    Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
 
+                }
             }
             proxiesLock.notifyAll();
             return success;
@@ -213,23 +209,26 @@ public class Backend implements MqttCallback {
     public boolean loadDescriptions() {
         synchronized (descriptionsLock) {
             boolean success = true;
-            String tentativePath = descriptionsSaveFileName ;
-            try {
-                FileInputStream fileIn = new FileInputStream(tentativePath);
-                ObjectMapper objMapper = new ObjectMapper();
-                String contents = new String(Files.readAllBytes(Paths.get(tentativePath)));
-                systemDescriptions = objMapper.readValue(contents, new TypeReference<TreeMap<Long, String>>() {
-                });
-                fileIn.close();
-            } catch (FileNotFoundException ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-                success = false;
-            } catch (IOException ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-                success = false;
-            } catch (Exception ex) {
-                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-                success = false;
+            FileInputStream fileIn = null;
+            String contents = null;
+            Path tentativePath = Paths.get(CommonValues.descriptionsSaveFileName);
+            if (Files.exists(tentativePath)) {
+                try {
+                    fileIn = new FileInputStream(tentativePath.toString());
+                    contents = new String(Files.readAllBytes(tentativePath));
+                    systemDescriptions = mapper.readValue(contents, new TypeReference<TreeMap<Long, String>>() {
+                    });
+                    fileIn.close();
+                } catch (FileNotFoundException ex) {
+                    Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                    success = false;
+                } catch (IOException ex) {
+                    Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                    success = false;
+                } catch (Exception ex) {
+                    Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                    success = false;
+                }
             }
             descriptionsLock.notifyAll();
             return success;
@@ -240,11 +239,13 @@ public class Backend implements MqttCallback {
     public void pushConfig(ArduinoConfigChangeRepresentation arg) {
         if (arg.hasChanges()) { // This prevents us from wasting MQTT requests on empty items.
             log("Pushing configuration");
-            ObjectMapper objectMapper = new ObjectMapper();
-            String messageStr;
+            String messageStr = null;
             try {
-                messageStr = objectMapper.writeValueAsString(arg);
+                messageStr = mapper.writeValueAsString(arg);
             } catch (JsonProcessingException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 return;
             }
@@ -278,7 +279,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            closeConnection(tcpOut, socket);
+            ConnectionUtils.closeConnection(tcpOut, socket);
             descriptionsLock.notifyAll();
         }
     }
@@ -306,7 +307,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            closeConnection(tcpOut, socket);
+            ConnectionUtils.closeConnection(tcpOut, socket);
             eventsLock.notifyAll();
         }
     }
@@ -319,12 +320,11 @@ public class Backend implements MqttCallback {
             TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
-                // Scanner tcpIn = new Scanner(socket.getInputStream());
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
                 tcpOut.println(CommonValues.pushProxiesToUI);
-                for (long key : systems.keySet()) {
+                for (long key : proxies.keySet()) {
                     if (liveSystems.contains(key)) {
-                        results.put(key, systems.get(key));
+                        results.put(key, proxies.get(key));
                     }
                 }
                 info = mapper.writeValueAsString(results);
@@ -334,25 +334,11 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            closeConnection(tcpOut, socket);
+            ConnectionUtils.closeConnection(tcpOut, socket);
             proxiesLock.notifyAll();
         }
     }
 
-    protected void closeConnection(PrintWriter tcpOut, Socket socket) {
-        try {
-            tcpOut.close();
-        } catch (Exception ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        try {
-            socket.close();
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (Exception ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        }
-    }
 
     // Required callbacks, implementing the MQTT library interface requirements.
     @Override
@@ -365,7 +351,6 @@ public class Backend implements MqttCallback {
     public void deliveryComplete(IMqttDeliveryToken token) {
         // Logic implementing what we do when we know stuff got delivered.
         // log("Delivery complete! " + token.toString());
-
     }
 
     @Override
@@ -383,7 +368,7 @@ public class Backend implements MqttCallback {
                 return;
             }
             handleEmbeddedEvent(splitTopic, message);
-        } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systems.
+        } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our proxies.
             handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             //  log("Got state control request");
@@ -398,7 +383,6 @@ public class Backend implements MqttCallback {
 
     protected void handleDescriptionUpdate(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        boolean success = true;
         try {
             TreeMap<Long, String> info = objectMapper.readValue(message.toString(), new TypeReference<TreeMap<Long, String>>() {
             });
@@ -406,10 +390,11 @@ public class Backend implements MqttCallback {
             synchronized (descriptionsLock) {
                 for (long k : info.keySet()) {
                     desc = info.get(k);
+                    if (desc.length() < CommonValues.maxDescriptionLength + 1) {
                     systemDescriptions.put(k, desc);
+                    }
                 }
                 //  log("Description for UID " + k + ": " + desc);
-             success = true;
                 descriptionsLock.notifyAll();
             }
         } catch (JsonProcessingException ex) {
@@ -424,7 +409,7 @@ public class Backend implements MqttCallback {
 
     protected void handleEmbeddedEvent(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        Integer info;
+        Integer info = null;
         try {
             info = objectMapper.readValue(message.toString(), Integer.class);
         } catch (JsonProcessingException ex) {
@@ -433,20 +418,22 @@ public class Backend implements MqttCallback {
         } catch (IOException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
+        } catch (Exception ex) {
+            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
 
         long uid = Long.parseLong(splitTopic[1]);
 
         boolean hasKey = false;
         synchronized (proxiesLock) {
-            hasKey = systems.containsKey(uid);
+            hasKey = proxies.containsKey(uid);
             proxiesLock.notifyAll();
         }
         synchronized (eventsLock) {
             if (hasKey) { // If we know the uid already, we can send to the device any its config info.
                 events.add(uid, System.currentTimeMillis(), info);
-                ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
-                //  log("Event \"" + info + "\" added to log. Device: " + uid);
+                // ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
+                /// log("Event \"" + info + "\" added to log. Device: " + uid);
             } else {
                 log("Received event for unknown device  " + uid);
             }
@@ -456,7 +443,7 @@ public class Backend implements MqttCallback {
 
     protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        ArduinoProxy info;
+        ArduinoProxy info = null;
         try {
             info = objectMapper.readValue(message.toString(), ArduinoProxy.class);
         } catch (JsonProcessingException ex) {
@@ -469,17 +456,18 @@ public class Backend implements MqttCallback {
         final long uid = info.getPersistentState().getUid();
         info.getTransientState().setTimestamp(System.currentTimeMillis());
         synchronized (proxiesLock) {
-            if (systems.containsKey(uid)) {
+            if (proxies.containsKey(uid)) {
                 if (!liveSystems.contains(uid)) {
                     liveSystems.add(uid);
-                    log("Re-adding " + uid + " to live systems!");
+                    log("Re-adding " + uid + " to live proxies!");
+                    subscribeToEmbeddedSystem(uid);
+
                 }
-                systems.replace(uid, info);
+                proxies.replace(uid, info);
             } else {
                 ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
                 proxy.getPersistentState().setUid(uid);
-                systems.put(uid, proxy);
-                subscribeToEmbeddedSystem(uid);
+                proxies.put(uid, proxy);
                 ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
                 representation.setPersistentState(info.getPersistentState());
                 representation.changeAll();
@@ -507,87 +495,12 @@ public class Backend implements MqttCallback {
         }
         // Send the control message to the relevant embedded devices, but validate first.
         for (ArduinoConfigChangeRepresentation req : requestItems) {
-            boolean settingLightsOnHour = false;
-            boolean settingLightsOffHour = false;
-            boolean settingLightsOnMinute = false;
-            boolean settingLightsOffMinute = false;
-            final int lightsOnHour = req.getPersistentState().getLightsOnHour();
-            final int lightsOnMinute = req.getPersistentState().getLightsOnMinute();
-            final int lightsOffHour = req.getPersistentState().getLightsOffHour();
-            final int lightsOffMinute = req.getPersistentState().getLightsOffMinute();
             final long uid = req.getPersistentState().getUid();
-            // Validating time
-            if (req.hasChanges()) {
-                if (req.isChangingLightsOnHour()) {
-                    settingLightsOnHour = true;
-                }
-                if (req.isChangingLightsOnMinute()) {
-                    settingLightsOnMinute = true;
-                }
-                if (req.isChangingLightsOffHour()) {
-                    settingLightsOffHour = true;
-                }
-                if (req.isChangingLightsOffMinute()) {
-                    settingLightsOffMinute = true;
-                }
-                boolean validOnTime = false;
-                if (settingLightsOnHour && settingLightsOnMinute) {
-                    validOnTime = TimeOfDayValidator.validate(lightsOnHour, lightsOnMinute);
-                } else if (settingLightsOnHour) {
-                    validOnTime = TimeOfDayValidator.validate(lightsOnHour, systems.get(uid).getPersistentState().getLightsOnMinute());
-                } else if (settingLightsOnMinute) {
-                    validOnTime = TimeOfDayValidator.validate(systems.get(uid).getPersistentState().getLightsOnHour(), lightsOnMinute);
-                }
-                if (!validOnTime) {
-                    req.setChangingLightsOnHour(false);
-                    req.setChangingLightsOnMinute(false);
-                }
-                boolean validOffTime = false;
-                if (settingLightsOffHour && settingLightsOffMinute) {
-                    validOffTime = TimeOfDayValidator.validate(lightsOffHour, lightsOffMinute);
-                } else if (settingLightsOffHour) {
-                    validOffTime = TimeOfDayValidator.validate(lightsOffHour, systems.get(uid).getPersistentState().getLightsOffMinute());
-                } else if (settingLightsOffMinute) {
-                    validOffTime = TimeOfDayValidator.validate(systems.get(uid).getPersistentState().getLightsOffHour(), lightsOffMinute);
-                }
-                if (!validOffTime) {
-                    req.setChangingLightsOffHour(false);
-                    req.setChangingLightsOffMinute(false);
-                }
-                // Validating misting interval
-                if (req.isChangingMistingInterval() && req.getPersistentState().getMistingInterval() < 0) {
-                    req.setChangingMistingInterval(false);
-                }
-                // Validating misting duration
-                if (req.isChangingMistingDuration() && req.getPersistentState().getMistingDuration() < 0) {
-                    req.setChangingMistingDuration(false);
-                }
-                // Validating solution ratio of nutrients vs water
-                final double solutionRatio = req.getPersistentState().getNutrientSolutionRatio();
-                if (req.isChangingNutrientSolutionRatio() && (solutionRatio > CommonValues.maxNutrientSolutionRatio || solutionRatio < CommonValues.minNutrientSolutionRatio)) {
-                    req.setChangingNutrientSolutionRatio(false);
-                }
-                // Validating humidity
-                final float humidity = req.getPersistentState().getTargetUpperChamberHumidity();
-                if (req.isChangingTargetUpperChamberHumidity() && (humidity > CommonValues.maxHumidity || humidity < CommonValues.minHumidity)) {
-                    req.setChangingTargetUpperChamberHumidity(false);
-                }
-                // Validating temperature
-                final float temperature = req.getPersistentState().getTargetUpperChamberTemperature();
-                if (req.isChangingTargetUpperChamberTemperature() && (temperature > CommonValues.maxTargetTemperature || temperature < CommonValues.minTargetTemperature)) {
-                    req.setChangingTargetUpperChamberTemperature(false);
-                }
-                // Validating target CO2 levels
-                if (req.isChangingTargetCO2PPM()) {
-                    final int ppm = req.getPersistentState().getTargetCO2PPM();
-                    if (ppm < CommonValues.minCO2PPM || ppm > CommonValues.maxCO2PPM) {
-                        req.setChangingTargetCO2PPM(false);
-                    }
-                }
-
-                pushConfig(req);
-                log("Sending a control packet");
+            if (proxies.containsKey(uid)) {
+                PersistentArduinoState current = proxies.get(uid).getPersistentState();
+                pushConfig(EmbeddedStateChangeValidator.validate(req, current.getLightsOnHour(), current.getLightsOnMinute(), current.getLightsOffHour(), current.getLightsOffMinute()));
             }
+            // log("Sending a control packet");
         }
     }
 
@@ -599,7 +512,7 @@ public class Backend implements MqttCallback {
         String eventTopic = TopicStrings.embeddedEvent();
         eventTopic += "/";
         eventTopic += uid;
-        subscribe(eventTopic, 2);
+        subscribe(eventTopic, 1);
     }
 
     // The following are async helper classes from https://github.com/eclipse/paho.mqtt.java
