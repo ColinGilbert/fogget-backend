@@ -25,10 +25,10 @@ import java.util.HashSet;
 import java.util.TreeMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import noob.plantsystem.common.ArduinoConfigChangeRepresentation;
-import noob.plantsystem.common.ArduinoEventDescriptions;
-import noob.plantsystem.common.ArduinoProxy;
-import noob.plantsystem.common.ArduinoProxySaneDefaultsFactory;
+import noob.plantsystem.common.EmbeddedSystemConfigChange;
+import noob.plantsystem.common.EmbeddedSystemEventDescriptions;
+import noob.plantsystem.common.EmbeddedSystemProxy;
+import noob.plantsystem.common.EmbeddedSystemProxySaneDefaultsFactory;
 import noob.plantsystem.common.CommonValues;
 import noob.plantsystem.common.ConnectionUtils;
 import noob.plantsystem.common.EmbeddedStateChangeValidator;
@@ -52,10 +52,10 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 public class Backend implements MqttCallback {
 
     protected EventPool events = new EventPool(CommonValues.eventPoolQueueSize);
-    protected TreeMap<Long, ArduinoProxy> proxies = new TreeMap<>();
+    protected TreeMap<Long, EmbeddedSystemProxy> proxies = new TreeMap<>();
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
-    protected ArduinoEventDescriptions eventDescriptions = new ArduinoEventDescriptions();
+    protected EmbeddedSystemEventDescriptions eventDescriptions = new EmbeddedSystemEventDescriptions();
     final Object proxiesLock = new Object();
     final Object descriptionsLock = new Object();
     final Object eventsLock = new Object();
@@ -115,7 +115,7 @@ public class Backend implements MqttCallback {
     public void markAbsentSystems() {
         long now = System.currentTimeMillis();
         for (Long key : proxies.keySet()) {
-            ArduinoProxy p = proxies.get(key);
+            EmbeddedSystemProxy p = proxies.get(key);
             if ((now - p.getTransientState().getTimestamp()) > CommonValues.embeddedSystemTimeout) {
                 liveSystems.remove(key);
             }
@@ -184,7 +184,7 @@ public class Backend implements MqttCallback {
                     fileIn = new FileInputStream(tentativePath.toString());
                     if (fileIn.available() > 0) {
                         contents = new String(Files.readAllBytes(tentativePath));
-                        proxies = mapper.readValue(contents, new TypeReference<TreeMap<Long, ArduinoProxy>>() {
+                        proxies = mapper.readValue(contents, new TypeReference<TreeMap<Long, EmbeddedSystemProxy>>() {
                         });
                         fileIn.close();
                     } else {
@@ -236,7 +236,7 @@ public class Backend implements MqttCallback {
     }
 
     // Logic to push configuration to embedded system.
-    public void pushConfig(ArduinoConfigChangeRepresentation arg) {
+    public void pushConfig(EmbeddedSystemConfigChange arg) {
         if (arg.hasChanges()) { // This prevents us from wasting MQTT requests on empty items.
             log("Pushing configuration");
             String messageStr = null;
@@ -317,7 +317,7 @@ public class Backend implements MqttCallback {
             Socket socket = null;
             PrintWriter tcpOut = null;
             String info = null;
-            TreeMap<Long, ArduinoProxy> results = new TreeMap<>();
+            TreeMap<Long, EmbeddedSystemProxy> results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
@@ -432,7 +432,7 @@ public class Backend implements MqttCallback {
         synchronized (eventsLock) {
             if (hasKey) { // If we know the uid already, we can send to the device any its config info.
                 events.add(uid, System.currentTimeMillis(), info);
-                // ArduinoEventDescriptions descr = new ArduinoEventDescriptions();
+                // EmbeddedSystemEventDescriptions descr = new EmbeddedSystemEventDescriptions();
                 /// log("Event \"" + info + "\" added to log. Device: " + uid);
             } else {
                 log("Received event for unknown device  " + uid);
@@ -443,9 +443,9 @@ public class Backend implements MqttCallback {
 
     protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        ArduinoProxy info = null;
+        EmbeddedSystemProxy info = null;
         try {
-            info = objectMapper.readValue(message.toString(), ArduinoProxy.class);
+            info = objectMapper.readValue(message.toString(), EmbeddedSystemProxy.class);
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
@@ -465,10 +465,10 @@ public class Backend implements MqttCallback {
                 }
                 proxies.replace(uid, info);
             } else {
-                ArduinoProxy proxy = ArduinoProxySaneDefaultsFactory.get();
+                EmbeddedSystemProxy proxy = EmbeddedSystemProxySaneDefaultsFactory.get();
                 proxy.getPersistentState().setUid(uid);
                 proxies.put(uid, proxy);
-                ArduinoConfigChangeRepresentation representation = new ArduinoConfigChangeRepresentation();
+                EmbeddedSystemConfigChange representation = new EmbeddedSystemConfigChange();
                 representation.setPersistentState(info.getPersistentState());
                 representation.changeAll();
                 pushConfig(representation);
@@ -480,11 +480,11 @@ public class Backend implements MqttCallback {
 
     protected void handleControllerRequest(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        ArrayList<ArduinoConfigChangeRepresentation> requestItems = new ArrayList<>();
+        ArrayList<EmbeddedSystemConfigChange> requestItems = new ArrayList<>();
         log("Got a request to change state!");
         //readValue(response, new TypeReference<ArrayList<ArduinoProxy>>() {} )
         try {
-            requestItems = objectMapper.readValue(message.toString(), new TypeReference<ArrayList<ArduinoConfigChangeRepresentation>>() {
+            requestItems = objectMapper.readValue(message.toString(), new TypeReference<ArrayList<EmbeddedSystemConfigChange>>() {
             });
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -494,7 +494,7 @@ public class Backend implements MqttCallback {
             return;
         }
         // Send the control message to the relevant embedded devices, but validate first.
-        for (ArduinoConfigChangeRepresentation req : requestItems) {
+        for (EmbeddedSystemConfigChange req : requestItems) {
             final long uid = req.getPersistentState().getUid();
             if (proxies.containsKey(uid)) {
                 PersistentArduinoState current = proxies.get(uid).getPersistentState();
