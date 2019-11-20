@@ -5,9 +5,7 @@
  */
 package noob.plantsystem.backend;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -25,16 +23,7 @@ import java.util.HashSet;
 import java.util.TreeMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import noob.plantsystem.common.EmbeddedSystemConfigChange;
-import noob.plantsystem.common.EmbeddedSystemEventDescriptions;
-import noob.plantsystem.common.EmbeddedSystemProxy;
-import noob.plantsystem.common.EmbeddedSystemProxySaneDefaultsFactory;
-import noob.plantsystem.common.CommonValues;
-import noob.plantsystem.common.ConnectionUtils;
-import noob.plantsystem.common.EmbeddedStateChangeValidator;
-import noob.plantsystem.common.EventRecord;
-import noob.plantsystem.common.PersistentArduinoState;
-import noob.plantsystem.common.TopicStrings;
+
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.IMqttToken;
@@ -45,6 +34,21 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
+import noob.plantsystem.common.EmbeddedSystemConfigChangeMemento;
+import noob.plantsystem.common.EmbeddedSystemEventDescriptions;
+import noob.plantsystem.common.EmbeddedSystemCombinedStateMemento;
+import noob.plantsystem.common.EmbeddedSystemStateSaneDefaultsFactory;
+import noob.plantsystem.common.CommonValues;
+import noob.plantsystem.common.ConnectionUtils;
+import noob.plantsystem.common.EmbeddedStateChangeValidator;
+import noob.plantsystem.common.EventRecordMemento;
+import noob.plantsystem.common.PersistentEmbeddedSystemStateMemento;
+import noob.plantsystem.common.TopicStrings;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 /**
  *
  * @author noob
@@ -52,7 +56,7 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 public class Backend implements MqttCallback {
 
     protected EventPool events = new EventPool(CommonValues.eventPoolQueueSize);
-    protected TreeMap<Long, EmbeddedSystemProxy> proxies = new TreeMap<>();
+    protected TreeMap<Long, EmbeddedSystemCombinedStateMemento> proxies = new TreeMap<>();
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
     protected EmbeddedSystemEventDescriptions eventDescriptions = new EmbeddedSystemEventDescriptions();
@@ -115,7 +119,7 @@ public class Backend implements MqttCallback {
     public void markAbsentSystems() {
         long now = System.currentTimeMillis();
         for (Long key : proxies.keySet()) {
-            EmbeddedSystemProxy p = proxies.get(key);
+            EmbeddedSystemCombinedStateMemento p = proxies.get(key);
             if ((now - p.getTransientState().getTimestamp()) > CommonValues.embeddedSystemTimeout) {
                 liveSystems.remove(key);
             }
@@ -184,7 +188,7 @@ public class Backend implements MqttCallback {
                     fileIn = new FileInputStream(tentativePath.toString());
                     if (fileIn.available() > 0) {
                         contents = new String(Files.readAllBytes(tentativePath));
-                        proxies = mapper.readValue(contents, new TypeReference<TreeMap<Long, EmbeddedSystemProxy>>() {
+                        proxies = mapper.readValue(contents, new TypeReference<TreeMap<Long, EmbeddedSystemCombinedStateMemento>>() {
                         });
                         fileIn.close();
                     } else {
@@ -236,7 +240,7 @@ public class Backend implements MqttCallback {
     }
 
     // Logic to push configuration to embedded system.
-    public void pushConfig(EmbeddedSystemConfigChange arg) {
+    public void pushConfig(EmbeddedSystemConfigChangeMemento arg) {
         if (arg.hasChanges()) { // This prevents us from wasting MQTT requests on empty items.
             log("Pushing configuration");
             String messageStr = null;
@@ -289,7 +293,7 @@ public class Backend implements MqttCallback {
             Socket socket = null;
             PrintWriter tcpOut = null;
             String info = null;
-            TreeMap<Long, ArrayDeque<EventRecord>> results = new TreeMap<>();
+            TreeMap<Long, ArrayDeque<EventRecordMemento>> results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
@@ -317,7 +321,7 @@ public class Backend implements MqttCallback {
             Socket socket = null;
             PrintWriter tcpOut = null;
             String info = null;
-            TreeMap<Long, EmbeddedSystemProxy> results = new TreeMap<>();
+            TreeMap<Long, EmbeddedSystemCombinedStateMemento> results = new TreeMap<>();
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
@@ -443,9 +447,9 @@ public class Backend implements MqttCallback {
 
     protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        EmbeddedSystemProxy info = null;
+        EmbeddedSystemCombinedStateMemento info = null;
         try {
-            info = objectMapper.readValue(message.toString(), EmbeddedSystemProxy.class);
+            info = objectMapper.readValue(message.toString(), EmbeddedSystemCombinedStateMemento.class);
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             return;
@@ -465,10 +469,10 @@ public class Backend implements MqttCallback {
                 }
                 proxies.replace(uid, info);
             } else {
-                EmbeddedSystemProxy proxy = EmbeddedSystemProxySaneDefaultsFactory.get();
+                EmbeddedSystemCombinedStateMemento proxy = EmbeddedSystemStateSaneDefaultsFactory.get();
                 proxy.getPersistentState().setUid(uid);
                 proxies.put(uid, proxy);
-                EmbeddedSystemConfigChange representation = new EmbeddedSystemConfigChange();
+                EmbeddedSystemConfigChangeMemento representation = new EmbeddedSystemConfigChangeMemento();
                 representation.setPersistentState(info.getPersistentState());
                 representation.changeAll();
                 pushConfig(representation);
@@ -480,11 +484,11 @@ public class Backend implements MqttCallback {
 
     protected void handleControllerRequest(MqttMessage message) {
         ObjectMapper objectMapper = new ObjectMapper();
-        ArrayList<EmbeddedSystemConfigChange> requestItems = new ArrayList<>();
+        ArrayList<EmbeddedSystemConfigChangeMemento> requestItems = new ArrayList<>();
         log("Got a request to change state!");
         //readValue(response, new TypeReference<ArrayList<ArduinoProxy>>() {} )
         try {
-            requestItems = objectMapper.readValue(message.toString(), new TypeReference<ArrayList<EmbeddedSystemConfigChange>>() {
+            requestItems = objectMapper.readValue(message.toString(), new TypeReference<ArrayList<EmbeddedSystemConfigChangeMemento>>() {
             });
         } catch (JsonProcessingException ex) {
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
@@ -494,10 +498,10 @@ public class Backend implements MqttCallback {
             return;
         }
         // Send the control message to the relevant embedded devices, but validate first.
-        for (EmbeddedSystemConfigChange req : requestItems) {
+        for (EmbeddedSystemConfigChangeMemento req : requestItems) {
             final long uid = req.getPersistentState().getUid();
             if (proxies.containsKey(uid)) {
-                PersistentArduinoState current = proxies.get(uid).getPersistentState();
+                PersistentEmbeddedSystemStateMemento current = proxies.get(uid).getPersistentState();
                 pushConfig(EmbeddedStateChangeValidator.validate(req, current.getLightsOnHour(), current.getLightsOnMinute(), current.getLightsOffHour(), current.getLightsOffMinute()));
             }
             // log("Sending a control packet");

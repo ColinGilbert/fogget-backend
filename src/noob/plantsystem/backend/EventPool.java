@@ -9,7 +9,7 @@ package noob.plantsystem.backend;
 import java.util.ArrayDeque;
 import java.util.TreeMap;
 import javafx.util.Pair;
-import noob.plantsystem.common.EventRecord;
+import noob.plantsystem.common.EventRecordMemento;
 
 /**
  *
@@ -24,7 +24,7 @@ public class EventPool {
 
     public synchronized void add(long uidArg, long timestampArg, int eventArg) {
         if (events.containsKey(uidArg)) {
-            EventRecord rec = new EventRecord();
+            EventRecordMemento rec = new EventRecordMemento();
             rec.setTimestamp(timestampArg);
             rec.setEvent(eventArg);
             if (events.get(uidArg).size() < capacity) {
@@ -40,7 +40,7 @@ public class EventPool {
         }
     }
 
-    public Pair<Boolean, ArrayDeque<EventRecord>> getEvents(long uid) {
+    public Pair<Boolean, ArrayDeque<EventRecordMemento>> getEvents(long uid) {
         if (events.containsKey(uid)) {
             return new Pair<>(true, events.get(uid));
         } else {
@@ -48,14 +48,14 @@ public class EventPool {
         }
     }
 
-    public TreeMap<Long, ArrayDeque<EventRecord>> getRaw() {
+    public TreeMap<Long, ArrayDeque<EventRecordMemento>> getRaw() {
         return events;
     }
 
-    public void setFromRaw(TreeMap<Long, ArrayDeque<EventRecord>> val) {
+    public void setFromRaw(TreeMap<Long, ArrayDeque<EventRecordMemento>> val) {
         events = val;
     }
 
-    protected TreeMap<Long, ArrayDeque<EventRecord>> events;
+    protected TreeMap<Long, ArrayDeque<EventRecordMemento>> events;
     int capacity;
 }
