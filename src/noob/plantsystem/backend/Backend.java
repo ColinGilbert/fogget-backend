@@ -56,11 +56,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class Backend implements MqttCallback {
 
     protected EventPool events = new EventPool(CommonValues.eventPoolQueueSize);
-    protected TreeMap<Long, EmbeddedSystemCombinedStateMemento> proxies = new TreeMap<>();
+    protected TreeMap<Long, EmbeddedSystemCombinedStateMemento> systemsRepresentation = new TreeMap<>();
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
     protected EmbeddedSystemEventDescriptions eventDescriptions = new EmbeddedSystemEventDescriptions();
-    final Object proxiesLock = new Object();
+    final Object systemsRepresentationLock = new Object();
     final Object descriptionsLock = new Object();
     final Object eventsLock = new Object();
     protected long currentTime;
@@ -118,8 +118,8 @@ public class Backend implements MqttCallback {
 
     public void markAbsentSystems() {
         long now = System.currentTimeMillis();
-        for (Long key : proxies.keySet()) {
-            EmbeddedSystemCombinedStateMemento p = proxies.get(key);
+        for (Long key : systemsRepresentation.keySet()) {
+            EmbeddedSystemCombinedStateMemento p = systemsRepresentation.get(key);
             if ((now - p.getTransientState().getTimestamp()) > CommonValues.embeddedSystemTimeout) {
                 liveSystems.remove(key);
             }
@@ -127,13 +127,13 @@ public class Backend implements MqttCallback {
     }
 
     public boolean saveSystems() {
-        synchronized (proxiesLock) {
+        synchronized (systemsRepresentationLock) {
             boolean success = true;
             File tentativePath = new File(CommonValues.stateSaveFileName);
             FileOutputStream fileOut = null;
             try {
                 fileOut = new FileOutputStream(tentativePath);
-                mapper.writeValue(fileOut, proxies);
+                mapper.writeValue(fileOut, systemsRepresentation);
                 fileOut.flush();
                 success = tentativePath.renameTo(new File(CommonValues.stateSaveFileName));
                 fileOut.close();
@@ -146,7 +146,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            proxiesLock.notifyAll();
+            systemsRepresentationLock.notifyAll();
             return success;
         }
     }
@@ -177,7 +177,7 @@ public class Backend implements MqttCallback {
     }
 
     public boolean loadSystems() {
-        synchronized (proxiesLock) {
+        synchronized (systemsRepresentationLock) {
             FileInputStream fileIn = null;
             boolean success = true;
             // String tentativePath = CommonValues.stateSaveFileName;
@@ -188,7 +188,7 @@ public class Backend implements MqttCallback {
                     fileIn = new FileInputStream(tentativePath.toString());
                     if (fileIn.available() > 0) {
                         contents = new String(Files.readAllBytes(tentativePath));
-                        proxies = mapper.readValue(contents, new TypeReference<TreeMap<Long, EmbeddedSystemCombinedStateMemento>>() {
+                        systemsRepresentation = mapper.readValue(contents, new TypeReference<TreeMap<Long, EmbeddedSystemCombinedStateMemento>>() {
                         });
                         fileIn.close();
                     } else {
@@ -205,7 +205,7 @@ public class Backend implements MqttCallback {
 
                 }
             }
-            proxiesLock.notifyAll();
+            systemsRepresentationLock.notifyAll();
             return success;
         }
     }
@@ -317,7 +317,7 @@ public class Backend implements MqttCallback {
     }
 
     public void pushStateDataToUI() {
-        synchronized (proxiesLock) {
+        synchronized (systemsRepresentationLock) {
             Socket socket = null;
             PrintWriter tcpOut = null;
             String info = null;
@@ -325,10 +325,10 @@ public class Backend implements MqttCallback {
             try {
                 socket = new Socket(CommonValues.localhost, CommonValues.localUIPort);
                 tcpOut = new PrintWriter(socket.getOutputStream(), true);
-                tcpOut.println(CommonValues.pushProxiesToUI);
-                for (long key : proxies.keySet()) {
+                tcpOut.println(CommonValues.pushSystemsToUI);
+                for (long key : systemsRepresentation.keySet()) {
                     if (liveSystems.contains(key)) {
-                        results.put(key, proxies.get(key));
+                        results.put(key, systemsRepresentation.get(key));
                     }
                 }
                 info = mapper.writeValueAsString(results);
@@ -339,7 +339,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
             ConnectionUtils.closeConnection(tcpOut, socket);
-            proxiesLock.notifyAll();
+            systemsRepresentationLock.notifyAll();
         }
     }
 
@@ -372,7 +372,7 @@ public class Backend implements MqttCallback {
                 return;
             }
             handleEmbeddedEvent(splitTopic, message);
-        } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our proxies.
+        } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systemsRepresentation.
             handleEmbeddedStatePush(splitTopic, message);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             //  log("Got state control request");
@@ -429,9 +429,9 @@ public class Backend implements MqttCallback {
         long uid = Long.parseLong(splitTopic[1]);
 
         boolean hasKey = false;
-        synchronized (proxiesLock) {
-            hasKey = proxies.containsKey(uid);
-            proxiesLock.notifyAll();
+        synchronized (systemsRepresentationLock) {
+            hasKey = systemsRepresentation.containsKey(uid);
+            systemsRepresentationLock.notifyAll();
         }
         synchronized (eventsLock) {
             if (hasKey) { // If we know the uid already, we can send to the device any its config info.
@@ -459,26 +459,26 @@ public class Backend implements MqttCallback {
         }
         final long uid = info.getPersistentState().getUid();
         info.getTransientState().setTimestamp(System.currentTimeMillis());
-        synchronized (proxiesLock) {
-            if (proxies.containsKey(uid)) {
+        synchronized (systemsRepresentationLock) {
+            if (systemsRepresentation.containsKey(uid)) {
                 if (!liveSystems.contains(uid)) {
                     liveSystems.add(uid);
-                    log("Re-adding " + uid + " to live proxies!");
+                    log("Re-adding " + uid + " to live systemsRepresentation!");
                     subscribeToEmbeddedSystem(uid);
 
                 }
-                proxies.replace(uid, info);
+                systemsRepresentation.replace(uid, info);
             } else {
                 EmbeddedSystemCombinedStateMemento proxy = EmbeddedSystemStateSaneDefaultsFactory.get();
                 proxy.getPersistentState().setUid(uid);
-                proxies.put(uid, proxy);
+                systemsRepresentation.put(uid, proxy);
                 EmbeddedSystemConfigChangeMemento representation = new EmbeddedSystemConfigChangeMemento();
                 representation.setPersistentState(info.getPersistentState());
                 representation.changeAll();
                 pushConfig(representation);
                 saveSystems();
             }
-            proxiesLock.notifyAll();
+            systemsRepresentationLock.notifyAll();
         }
     }
 
@@ -500,8 +500,8 @@ public class Backend implements MqttCallback {
         // Send the control message to the relevant embedded devices, but validate first.
         for (EmbeddedSystemConfigChangeMemento req : requestItems) {
             final long uid = req.getPersistentState().getUid();
-            if (proxies.containsKey(uid)) {
-                PersistentEmbeddedSystemStateMemento current = proxies.get(uid).getPersistentState();
+            if (systemsRepresentation.containsKey(uid)) {
+                PersistentEmbeddedSystemStateMemento current = systemsRepresentation.get(uid).getPersistentState();
                 pushConfig(EmbeddedStateChangeValidator.validate(req, current.getLightsOnHour(), current.getLightsOnMinute(), current.getLightsOffHour(), current.getLightsOffMinute()));
             }
             // log("Sending a control packet");
