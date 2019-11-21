@@ -38,11 +38,10 @@ import noob.plantsystem.common.EmbeddedSystemEventDescriptions;
 import noob.plantsystem.common.EmbeddedSystemCombinedStateMemento;
 import noob.plantsystem.common.EmbeddedSystemStateSaneDefaultsFactory;
 import noob.plantsystem.common.CommonValues;
-import noob.plantsystem.common.ConnectionUtils;
+import noob.plantsystem.common.ConnectionCloser;
 import noob.plantsystem.common.EmbeddedStateChangeValidator;
 import noob.plantsystem.common.EventRecordMemento;
 import noob.plantsystem.common.PersistentEmbeddedSystemStateMemento;
-import noob.plantsystem.common.TopicStrings;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -87,6 +86,14 @@ public class Backend implements MqttCallback {
         logging = arg;
     }
 
+  //  pushEventFromEmbeddedTopic = "pushEventFromEmbedded";
+  //  pushStatusToBackendTopic = "pushStatusToBackendTopic";
+  //  pushConfigToEmbeddedTopic = "pushConfigToEmbedded";
+  //  updateDescriptionRequestTopic = "updateDescriptionRequest";
+  //  configEmbeddedRequestTopic = "configEmbeddedRequest";
+    
+    
+    
     public void connect() {
         MqttConnector con = new MqttConnector();
         con.doConnect();
@@ -96,9 +103,9 @@ public class Backend implements MqttCallback {
             Thread.currentThread().interrupt();
             Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
         }
-        subscribe(TopicStrings.stateControlRequest(), 1);
-        subscribe(TopicStrings.descriptionsUpdateRequest(), 1);
-        subscribe(TopicStrings.embeddedStatePush(), 0);
+        subscribe(CommonValues.configEmbeddedRequestTopic, 1);
+        subscribe(CommonValues.updateDescriptionRequestTopic, 1);
+        subscribe(CommonValues.pushStatusToBackendTopic, 0);
     }
 
     public void disconnect() {
@@ -127,13 +134,20 @@ public class Backend implements MqttCallback {
     }
 
     public boolean saveSystems() {
-        synchronized (systemsRepresentationLock) {
+            
+            TreeMap<Long, PersistentEmbeddedSystemStateMemento> toSave = new TreeMap<>();
+            synchronized (systemsRepresentationLock) {
+            for (long k: systemsRepresentation.keySet()) {
+                toSave.put(k, systemsRepresentation.get(k).getPersistentState());
+            }
+            systemsRepresentationLock.notifyAll();
+        }
             boolean success = true;
             File tentativePath = new File(CommonValues.stateSaveFileName);
             FileOutputStream fileOut = null;
             try {
                 fileOut = new FileOutputStream(tentativePath);
-                mapper.writeValue(fileOut, systemsRepresentation);
+                mapper.writeValue(fileOut, toSave);
                 fileOut.flush();
                 success = tentativePath.renameTo(new File(CommonValues.stateSaveFileName));
                 fileOut.close();
@@ -146,10 +160,9 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            systemsRepresentationLock.notifyAll();
             return success;
         }
-    }
+    
 
     public boolean saveDescriptions() {
         synchronized (descriptionsLock) {
@@ -188,8 +201,15 @@ public class Backend implements MqttCallback {
                     fileIn = new FileInputStream(tentativePath.toString());
                     if (fileIn.available() > 0) {
                         contents = new String(Files.readAllBytes(tentativePath));
-                        systemsRepresentation = mapper.readValue(contents, new TypeReference<TreeMap<Long, EmbeddedSystemCombinedStateMemento>>() {
+                        TreeMap<Long, PersistentEmbeddedSystemStateMemento> fromSave = new TreeMap<>();
+                        fromSave = mapper.readValue(contents, new TypeReference<TreeMap<Long, PersistentEmbeddedSystemStateMemento>>() {
                         });
+                        for (long k : fromSave.keySet())
+                        {
+                            EmbeddedSystemCombinedStateMemento memento = new EmbeddedSystemCombinedStateMemento();
+                            memento.setPersistentState(fromSave.get(k));
+                            systemsRepresentation.put(k, memento);
+                        }
                         fileIn.close();
                     } else {
                         success = false;
@@ -253,7 +273,7 @@ public class Backend implements MqttCallback {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
                 return;
             }
-            String topic = TopicStrings.configPushToEmbedded();
+            String topic = CommonValues.pushConfigToEmbeddedTopic;
             topic += "/";
             topic += Long.toString(arg.getPersistentState().getUid());
             try {
@@ -283,7 +303,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            ConnectionUtils.closeConnection(tcpOut, socket);
+            ConnectionCloser.closeConnection(tcpOut, socket);
             descriptionsLock.notifyAll();
         }
     }
@@ -311,7 +331,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            ConnectionUtils.closeConnection(tcpOut, socket);
+            ConnectionCloser.closeConnection(tcpOut, socket);
             eventsLock.notifyAll();
         }
     }
@@ -338,7 +358,7 @@ public class Backend implements MqttCallback {
             } catch (Exception ex) {
                 Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
             }
-            ConnectionUtils.closeConnection(tcpOut, socket);
+            ConnectionCloser.closeConnection(tcpOut, socket);
             systemsRepresentationLock.notifyAll();
         }
     }
@@ -365,7 +385,7 @@ public class Backend implements MqttCallback {
             return;
         }
         String initialTopic = splitTopic[0];
-        if (initialTopic.equals(TopicStrings.embeddedEvent())) { // We have been just informed of an event that is worth logging...
+        if (initialTopic.equals(CommonValues.pushEventFromEmbeddedTopic)) { // We have been just informed of an event that is worth logging...
             if (splitTopic.length < 2) {
                 log("No uid in topic string for embedded event message.");
                 return;
@@ -395,7 +415,7 @@ public class Backend implements MqttCallback {
             }
             handleEmbeddedEvent(uid, info);
 
-        } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systemsRepresentation.
+        } else if (initialTopic.equals(CommonValues.pushStatusToBackendTopic)) { // We have just been given our periodic status update from one of our systemsRepresentation.
             EmbeddedSystemCombinedStateMemento info = null;
             try {
                 info = mapper.readValue(message.toString(), EmbeddedSystemCombinedStateMemento.class);
@@ -409,7 +429,7 @@ public class Backend implements MqttCallback {
             final long uid = info.getPersistentState().getUid();
             info.getTransientState().setTimestamp(System.currentTimeMillis());
             handleEmbeddedStatePush(uid, info);
-        } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
+        } else if (initialTopic.equals(CommonValues.configEmbeddedRequestTopic)) {
             //  log("Got state control request");
             ArrayList<EmbeddedSystemConfigChangeMemento> requestItems = null;
             log("Got a request to change state!");
@@ -425,7 +445,7 @@ public class Backend implements MqttCallback {
                 return;
             }
             handleControllerRequest(requestItems);
-        } else if (initialTopic.equals(TopicStrings.descriptionsUpdateRequest())) {
+        } else if (initialTopic.equals(CommonValues.updateDescriptionRequestTopic)) {
             try {
                 TreeMap<Long, String> info = mapper.readValue(message.toString(), new TypeReference<TreeMap<Long, String>>() {
                 });
@@ -510,11 +530,11 @@ public class Backend implements MqttCallback {
     }
 
     protected void subscribeToEmbeddedSystem(long uid) {
-        String statusReportTopic = TopicStrings.embeddedStatePush();
+        String statusReportTopic = CommonValues.pushStatusToBackendTopic;
         statusReportTopic += "/";
         statusReportTopic += uid;
         subscribe(statusReportTopic, 0);
-        String eventTopic = TopicStrings.embeddedEvent();
+        String eventTopic = CommonValues.pushEventFromEmbeddedTopic;
         eventTopic += "/";
         eventTopic += uid;
         subscribe(eventTopic, 1);

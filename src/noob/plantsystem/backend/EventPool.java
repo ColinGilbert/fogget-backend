@@ -54,8 +54,4 @@ public class EventPool {
     public TreeMap<Long, ArrayDeque<EventRecordMemento>> getRaw() {
         return events;
     }
-
-    public void setFromRaw(TreeMap<Long, ArrayDeque<EventRecordMemento>> val) {
-        events = val;
-    }
 }
