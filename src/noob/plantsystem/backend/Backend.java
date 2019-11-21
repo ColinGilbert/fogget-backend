@@ -5,7 +5,6 @@
  */
 package noob.plantsystem.backend;
 
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -48,6 +47,7 @@ import noob.plantsystem.common.TopicStrings;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import noob.plantsystem.common.EmbeddedSystemEventType;
 
 /**
  *
@@ -60,9 +60,9 @@ public class Backend implements MqttCallback {
     protected TreeMap<Long, String> systemDescriptions = new TreeMap<>();
     protected HashSet<Long> liveSystems = new HashSet<>();
     protected EmbeddedSystemEventDescriptions eventDescriptions = new EmbeddedSystemEventDescriptions();
-    final Object systemsRepresentationLock = new Object();
-    final Object descriptionsLock = new Object();
-    final Object eventsLock = new Object();
+    protected final Object systemsRepresentationLock = new Object();
+    protected final Object descriptionsLock = new Object();
+    protected final Object eventsLock = new Object();
     protected long currentTime;
     //MQTT related
     protected String brokerURL = CommonValues.mqttBrokerURL;
@@ -343,7 +343,6 @@ public class Backend implements MqttCallback {
         }
     }
 
-
     // Required callbacks, implementing the MQTT library interface requirements.
     @Override
     public void connectionLost(Throwable cause) {
@@ -371,101 +370,117 @@ public class Backend implements MqttCallback {
                 log("No uid in topic string for embedded event message.");
                 return;
             }
-            handleEmbeddedEvent(splitTopic, message);
+            Integer info = null;
+            try {
+                info = mapper.readValue(message.toString(), Integer.class);
+            } catch (JsonProcessingException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            }
+            long uid = 0;
+            try {
+                uid = Long.parseLong(splitTopic[1]);
+            } catch (NumberFormatException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            } catch (Exception ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            }
+            handleEmbeddedEvent(uid, info);
+
         } else if (initialTopic.equals(TopicStrings.embeddedStatePush())) { // We have just been given our periodic status update from one of our systemsRepresentation.
-            handleEmbeddedStatePush(splitTopic, message);
+            EmbeddedSystemCombinedStateMemento info = null;
+            try {
+                info = mapper.readValue(message.toString(), EmbeddedSystemCombinedStateMemento.class);
+            } catch (JsonProcessingException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            }
+            final long uid = info.getPersistentState().getUid();
+            info.getTransientState().setTimestamp(System.currentTimeMillis());
+            handleEmbeddedStatePush(uid, info);
         } else if (initialTopic.equals(TopicStrings.stateControlRequest())) {
             //  log("Got state control request");
-            handleControllerRequest(message);
+            ArrayList<EmbeddedSystemConfigChangeMemento> requestItems = null;
+            log("Got a request to change state!");
+            //readValue(response, new TypeReference<ArrayList<ArduinoProxy>>() {} )
+            try {
+                requestItems = mapper.readValue(message.toString(), new TypeReference<ArrayList<EmbeddedSystemConfigChangeMemento>>() {
+                });
+            } catch (JsonProcessingException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+                return;
+            }
+            handleControllerRequest(requestItems);
         } else if (initialTopic.equals(TopicStrings.descriptionsUpdateRequest())) {
-            //  log("Got description update request");
-            handleDescriptionUpdate(message);
+            try {
+                TreeMap<Long, String> info = mapper.readValue(message.toString(), new TypeReference<TreeMap<Long, String>>() {
+                });
+                //  log("Got description update request");
+                handleDescriptionUpdate(info);
+            } catch (JsonProcessingException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (IOException ex) {
+                Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
+            }
         } else {
             log("Unknown MQTT topic received: " + topic);
         }
     }
 
-    protected void handleDescriptionUpdate(MqttMessage message) {
-        ObjectMapper objectMapper = new ObjectMapper();
-        try {
-            TreeMap<Long, String> info = objectMapper.readValue(message.toString(), new TypeReference<TreeMap<Long, String>>() {
-            });
-            String desc = null;
-            synchronized (descriptionsLock) {
-                for (long k : info.keySet()) {
-                    desc = info.get(k);
-                    if (desc.length() < CommonValues.maxDescriptionLength + 1) {
+    protected void handleDescriptionUpdate(TreeMap<Long, String> info) {
+        String desc = null;
+        synchronized (descriptionsLock) {
+            for (long k : info.keySet()) {
+                desc = info.get(k);
+                if (desc.length() < CommonValues.maxDescriptionLength + 1) {
                     systemDescriptions.put(k, desc);
-                    }
                 }
-                //  log("Description for UID " + k + ": " + desc);
-                descriptionsLock.notifyAll();
             }
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
+            //  log("Description for UID " + k + ": " + desc);
+            descriptionsLock.notifyAll();
         }
         saveDescriptions();
     }
 
-    protected void handleEmbeddedEvent(String[] splitTopic, MqttMessage message) {
-        ObjectMapper objectMapper = new ObjectMapper();
-        Integer info = null;
-        try {
-            info = objectMapper.readValue(message.toString(), Integer.class);
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        } catch (Exception ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-        }
-
-        long uid = Long.parseLong(splitTopic[1]);
-
+    protected void handleEmbeddedEvent(long uid, int info) {
         boolean hasKey = false;
         synchronized (systemsRepresentationLock) {
             hasKey = systemsRepresentation.containsKey(uid);
             systemsRepresentationLock.notifyAll();
         }
-        synchronized (eventsLock) {
-            if (hasKey) { // If we know the uid already, we can send to the device any its config info.
+        if (hasKey) { // If we know the uid already, we can send to the device any its config info.
+            synchronized (eventsLock) {
                 events.add(uid, System.currentTimeMillis(), info);
                 // EmbeddedSystemEventDescriptions descr = new EmbeddedSystemEventDescriptions();
                 /// log("Event \"" + info + "\" added to log. Device: " + uid);
-            } else {
-                log("Received event for unknown device  " + uid);
+                eventsLock.notifyAll();
             }
-            eventsLock.notifyAll();
+        } else {
+            log("Received event for unknown device  " + uid);
         }
     }
 
-    protected void handleEmbeddedStatePush(String[] splitTopic, MqttMessage message) {
-        ObjectMapper objectMapper = new ObjectMapper();
-        EmbeddedSystemCombinedStateMemento info = null;
-        try {
-            info = objectMapper.readValue(message.toString(), EmbeddedSystemCombinedStateMemento.class);
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        }
-        final long uid = info.getPersistentState().getUid();
-        info.getTransientState().setTimestamp(System.currentTimeMillis());
+    protected void handleEmbeddedStatePush(long uid, EmbeddedSystemCombinedStateMemento info) {
         synchronized (systemsRepresentationLock) {
             if (systemsRepresentation.containsKey(uid)) {
                 if (!liveSystems.contains(uid)) {
                     liveSystems.add(uid);
                     log("Re-adding " + uid + " to live systemsRepresentation!");
                     subscribeToEmbeddedSystem(uid);
-
                 }
                 systemsRepresentation.replace(uid, info);
             } else {
@@ -482,21 +497,7 @@ public class Backend implements MqttCallback {
         }
     }
 
-    protected void handleControllerRequest(MqttMessage message) {
-        ObjectMapper objectMapper = new ObjectMapper();
-        ArrayList<EmbeddedSystemConfigChangeMemento> requestItems = new ArrayList<>();
-        log("Got a request to change state!");
-        //readValue(response, new TypeReference<ArrayList<ArduinoProxy>>() {} )
-        try {
-            requestItems = objectMapper.readValue(message.toString(), new TypeReference<ArrayList<EmbeddedSystemConfigChangeMemento>>() {
-            });
-        } catch (JsonProcessingException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        } catch (IOException ex) {
-            Logger.getLogger(Backend.class.getName()).log(Level.SEVERE, null, ex);
-            return;
-        }
+    protected void handleControllerRequest(ArrayList<EmbeddedSystemConfigChangeMemento> requestItems) {
         // Send the control message to the relevant embedded devices, but validate first.
         for (EmbeddedSystemConfigChangeMemento req : requestItems) {
             final long uid = req.getPersistentState().getUid();

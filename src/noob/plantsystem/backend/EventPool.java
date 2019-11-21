@@ -17,6 +17,9 @@ import noob.plantsystem.common.EventRecordMemento;
  */
 public class EventPool {
 
+    protected TreeMap<Long, ArrayDeque<EventRecordMemento>> events;
+    protected int capacity;
+    
     public EventPool(int bufferSize) {
         capacity = bufferSize;
         events = new TreeMap<>();
@@ -55,7 +58,4 @@ public class EventPool {
     public void setFromRaw(TreeMap<Long, ArrayDeque<EventRecordMemento>> val) {
         events = val;
     }
-
-    protected TreeMap<Long, ArrayDeque<EventRecordMemento>> events;
-    int capacity;
 }
