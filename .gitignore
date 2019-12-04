@@ -1,2 +1,4 @@
 DESCRIPTIONS.SAVE
 SYSTEMS.SAVE
+/fogget-backend/dist/
+/fogget-backend/nbproject/private/
